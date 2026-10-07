@@ -1,0 +1,1 @@
+tuic://11111111-2222-3333-4444-555555555555:not-a-real-tuic-password@tuic.example.com:443?congestion_control=bbr&alpn=h3&sni=tuic.example.com#Example%20TUIC

@@ -1,0 +1,167 @@
+[Unit]
+Description=Wayfarer control plane
+Documentation=https://github.com/wayfarer
+# Deliberately NOT After= or Requires= the proxy core: the control plane must stay
+# reachable exactly when the data plane is down. A dependency here would mean a failed
+# core takes the interface with it, which is the failure this project exists to remove.
+After=network.target dbus.service
+Wants=network.target
+
+# A crash loop has to end, and these three directives live in [Unit] rather than [Service].
+#
+# **That placement is the whole point of this comment.** They were first written in [Service], where
+# systemd silently ignores them: the unit parsed without complaint, the file looked correct, a test
+# that read the file passed — and `systemctl show -p StartLimitIntervalUSec` on the device reported
+# `10s`, the untouched default. Measured on the bench board, 2026-09-20. A directive in the wrong
+# section is not an error, it is a no-op, which is the most expensive kind of mistake a unit file can
+# contain.
+#
+# Why the window is widened rather than the count lowered. `Restart=always` with no bound is an
+# infinite loop written as configuration, and systemd's defaults — 5 starts in 10 seconds — catch a
+# *fast* loop and miss a slow one entirely: a daemon that runs for thirty seconds before dying never
+# trips them and restarts all day. At most 5 starts in 5 minutes bounds both.
+#
+# What this does not do, stated rather than implied: the give-up does not survive a reboot, so a
+# device that boots into the same fault will try 5 more times per boot. That is bounded per boot,
+# which is the property that matters, and the journal recording it is RAM-backed — which is why the
+# persistent event ring exists.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+# Stay failed rather than escalating. A unit that reboots the machine on failure turns one fault into
+# a boot loop, and on a board with no console that is indistinguishable from dead hardware.
+StartLimitAction=none
+
+[Service]
+Type=notify
+# NotifyAccess=all, not main: this runtime cannot open a Unix *datagram* socket, so readiness
+# and watchdog notifications are sent by running systemd-notify, and that datagram arrives
+# from a helper process rather than from the main one. With NotifyAccess=main systemd ignores
+# them and kills the unit at TimeoutStartSec with no explanation. See src/platform/notify.ts.
+NotifyAccess=all
+ExecStart=/usr/local/bin/node /opt/wayfarer/daemon.cjs
+Restart=always
+RestartSec=5
+
+
+# The cgroup, not just the main process. This is the default, and it is written out because it is
+# load-bearing and silent when wrong: with `KillMode=process`, children this daemon started are left
+# behind at every restart, so a bounded-looking failure accumulates processes across restart cycles
+# without limit. This daemon drives several tools by running them, so it always has children.
+KillMode=control-group
+# The daemon pings the watchdog from its own event loop, so a wedged loop is restarted
+# rather than left listening and answering nothing.
+# Generous on purpose: each ping costs a process (see NotifyAccess above), and the daemon
+# pings at a third of this interval.
+WatchdogSec=60s
+TimeoutStartSec=60
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# Logs go to the journal through stdout; no files, no rotation on the card.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wayfarer
+
+# Expected resident size is 45–70 MB, so both limits are large multiples: a leak becomes
+# visible in the journal long before either is reached, which is the point of having a
+# soft one. Override in a drop-in on hardware where these are wrong.
+MemoryHigh=384M
+MemoryMax=768M
+
+# A ceiling on processes, and it is a guard rather than a diagnosis.
+#
+# This daemon drives several tools by running them, and two traps already recorded for it are about
+# child processes accumulating: one-shot control-socket calls piling up while each waits out its own
+# timeout, and a long-lived reader whose grandchild outlives the kill that was meant to stop it.
+# `MemoryMax` above bounds what those cost in memory, but nothing bounded how many of them could
+# exist — and the system's process table is shared, so a runaway here is not a problem confined to
+# this unit. Its most likely visible symptom is a machine that accepts a TCP connection on port 22
+# and then closes it without a banner, because sshd cannot fork a session.
+#
+# The point of the number is not the number. It is that **a human can still log in while our software
+# is misbehaving**, so it has to leave the rest of the process table alone by a wide margin.
+#
+# Where 512 comes from, measured on the bench board (Armbian 26.11, kernel 6.18.49-current-sunxi64,
+# systemd 257.13, 2026-09-20):
+#
+#   kernel.pid_max      4194304
+#   kernel.threads-max  15537
+#   DefaultTasksMax     2330        ← 15% of threads-max, NOT of pid_max
+#   whole system, idle  156 tasks
+#
+# One correction worth keeping, because it is the sort of thing repeated from memory: systemd's
+# `DefaultTasksMax` is documented as a percentage and it is taken from **threads-max**, not from
+# `pid_max`. On this board pid_max is 4.2 million and completely irrelevant to the cap that applies.
+#
+# So 512 is 22% of the limit that would otherwise apply, 3.3% of the kernel's thread ceiling, and
+# more than three times the entire system's idle task count. A correct run of this daemon is the
+# process plus one long-lived subscriber per watched interface and a handful of short-lived probes —
+# single figures. The headroom is deliberate and the ceiling is still far below what it takes to stop
+# a human logging in, which is the only property that matters here.
+TasksMax=512
+
+# Sandbox. The capability set needed here is effectively all of network root, so the
+# reduction lives in this block rather than in a privilege split.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SYS_TIME CAP_KILL
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ProtectHome=yes
+# /tmp is writable and PrivateTmp is NOT set. Both are measurements, not oversights: hostapd_cli
+# creates its own client socket under /tmp and hostapd replies to that path, so the two obvious
+# hardening choices each break access-point control in a different way. Measured on the bench board
+# with hostapd 2.10 and systemd 257.13:
+#
+#   ProtectSystem=strict, /tmp not writable
+#     → "Failed to connect to hostapd - wpa_ctrl_open: Read-only file system"
+#   PrivateTmp=yes
+#     → "'STATUS' command timed out."  (our /tmp is a private namespace; hostapd cannot reach the
+#        client socket, so the reply goes nowhere. Worse than the first: the command exists, the
+#        socket exists, the permissions are right, and the daemon simply reports an empty access
+#        point.)
+#
+# hostapd_cli 2.10 has no option to move its client socket, so the choice is a writable shared /tmp
+# or no access-point control at all.
+# Every writable path is one this project owns, and the list is deliberately shorter than it was.
+#
+# `/usr/local/lib/systemd/system` is here because the generated units live there. It used to be
+# `/etc/systemd/system`, and that was a defect rather than a preference: systemd masks a unit by creating
+# a symlink at `/etc/systemd/system/<unit>`, so a unit file already at that path makes masking impossible —
+# measured on the bench board, `systemctl mask wayfarer` failed with "File
+# '/etc/systemd/system/wayfarer.service' already exists", which meant the deadman could not take our
+# software out of the boot path at all. That directory belongs to the administrator; ours go under
+# /usr/local/lib, which systemd searches at lower precedence and which leaves masking and overriding free.
+#
+# `/etc/hostapd`, `/etc/dnsmasq.d` and `/etc/nftables.conf` have been REMOVED. Nothing here writes to
+# them any more: all generated configuration lives under /etc/wayfarer, and the firewall is applied
+# from a file of ours rather than through the distribution's. Those three are directories other
+# software on a device legitimately owns, and a write capability that nothing uses is a capability
+# that can only ever be used by mistake — on the bench board, two of the three hold the live access
+# point and address-service configuration for a system this project must not touch.
+# `/etc/netplan` is here for **one** operation: moving another manager's file aside when a role has asked
+# to take its interface over, and moving it back on a revert. Nothing writes a file there and nothing edits
+# one. It was missing, and the cost was not a refused write — it was a `network` apply that was planned,
+# accepted, given a transaction, given a confirmation window and a revert timer, and then failed with
+# `EROFS` on a permission that was knowable before anything moved.
+#
+# The general lesson is in the reconciler's `paths-writable` check rather than in this line: a sandbox's
+# writable set and a planner's intentions are two descriptions of what we may touch, and they drift. A test
+# now compares them mechanically, so this list can no longer silently disagree with what the generators do.
+ReadWritePaths=/etc/wayfarer /var/lib/wayfarer /usr/local/lib/systemd/system /etc/systemd/network /etc/netplan /etc/sysctl.d /run /tmp
+ProtectKernelTunables=no
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# AF_NETLINK is required: interface and address state come from the kernel over netlink.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallFilter=@system-service @network-io
+SystemCallErrorNumber=EPERM
+# MemoryDenyWriteExecute cannot be used: the JavaScript engine needs writable-executable
+# pages and the daemon will not start with it set. Stated here rather than silently
+# omitted, so nobody adds it back as an obvious improvement.
+
+[Install]
+WantedBy=multi-user.target

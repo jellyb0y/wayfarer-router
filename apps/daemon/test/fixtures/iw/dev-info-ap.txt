@@ -1,0 +1,12 @@
+Interface wlanap
+	ifindex 3
+	wdev 0x1
+	addr aa:bb:cc:00:0a:01
+	ssid bench-ap
+	type AP
+	wiphy 0
+	channel 149 (5745 MHz), width: 80 MHz, center1: 5775 MHz
+	txpower 3.00 dBm
+	multicast TXQ:
+		qsz-byt	qsz-pkt	flows	drops	marks	overlmt	hashcol	tx-bytes	tx-packets
+		0	0	2671	0	0	0	0	831934		2678

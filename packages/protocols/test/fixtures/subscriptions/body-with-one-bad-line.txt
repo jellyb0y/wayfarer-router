@@ -1,0 +1,3 @@
+vless://11111111-2222-3333-4444-555555555555@vless.example.com:443?encryption=none&security=tls&sni=vless.example.com&type=ws&path=%2Fwebsocket&host=vless.example.com&fp=chrome#Example%20VLESS%20WS
+socks5://someone@proxy.example.com:1080#Not%20a%20scheme%20we%20parse
+trojan://not-a-real-trojan-password@trojan.example.com:8443?security=tls&sni=trojan.example.com&type=grpc&path=%2FGunService#Example%20Trojan%20gRPC

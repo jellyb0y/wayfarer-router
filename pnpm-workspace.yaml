@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+# esbuild ships a platform binary through a postinstall script, and pnpm 11 refuses to run
+# install scripts until each package is named here. Allowed one at a time rather than globally
+# (`dangerouslyAllowAllBuilds`), so a newly added dependency cannot start running build scripts
+# unnoticed — on a project whose dependencies end up on a device with privileged network access,
+# that difference is the point.
+allowBuilds:
+  esbuild: true
+dangerouslyAllowAllBuilds: false

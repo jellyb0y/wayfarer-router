@@ -1,0 +1,1 @@
+hysteria2://not-a-real-hysteria-password@hy2.example.com:8443?sni=hy2.example.com&insecure=1&obfs=salamander&obfs-password=not-a-real-obfs-password#Example%20Hysteria2

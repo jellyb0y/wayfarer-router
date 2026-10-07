@@ -1,0 +1,120 @@
+#!/bin/sh
+# One wrapper, so `hostapd_cli` and `wpa_cli` typed by hand on this board are correct without
+# anybody remembering a flag.
+#
+# ## The flag, and why it exists at all
+#
+# This device deliberately does not share a control-socket namespace with whatever else may be
+# installed. hostapd is configured with `ctrl_interface=/run/wayfarer/hostapd` and wpa_supplicant
+# with `ctrl_interface=DIR=/run/wayfarer/supplicant`, so nothing of ours collides with a distribution
+# package and nothing of ours is driven by one. Both tools default to `/var/run/hostapd` and
+# `/var/run/wpa_supplicant`, which on this board are either absent or somebody else's.
+#
+# The cost is one flag. `hostapd_cli -i <ap> status` without `-p /run/wayfarer/hostapd` does not
+# fail: it reports a working access point as absent. `wpa_cli` does the same for the uplink. A
+# command that answers confidently with the wrong answer is worse than one that errors.
+#
+# ## Why a wrapper and not the warning we already print
+#
+# The plan already prints this. Every plan that configures an access point carries a note naming the
+# socket and the flag. Measured on 2026-09-21: an experienced operator ignored that note six times in
+# one evening — not once, six times, having read it each time. That is the whole argument. **A
+# warning that can be ignored is weaker than a mechanism that cannot be bypassed**, and the note
+# stays only because it explains why this exists.
+#
+# ## What this does not do
+#
+# It does not shadow or hide the real binaries. `hostapd_cli` and `wpa_cli` remain on PATH, under
+# their own names, doing exactly what they always did — anyone driving a foreign hostapd needs them,
+# and a wrapper that intercepted the name would be a second trap replacing the first. This is
+# installed beside them under its own name, as `wayfarer-hostapd_cli` and `wayfarer-wpa_cli`.
+#
+# ## Why it refuses an explicit -p rather than honouring it
+#
+# Passing `-p` here is almost always muscle memory from a device where the sockets live somewhere
+# else, and honouring it silently would reintroduce the exact failure the wrapper exists to prevent —
+# a confident wrong answer. So it refuses, names the directory it would have used, and names the real
+# binary for anyone who genuinely means a different socket. The escape hatch is the unwrapped tool,
+# which is why not hiding it matters.
+#
+# ## Shell notes
+#
+# POSIX sh and no pipelines: this is typed at the moment the daemon may be down, so it must depend on
+# nothing but the tool it wraps. `exec` so the exit status and the signals are the tool's own.
+
+set -eu
+
+HOSTAPD_CONTROL_DIR=/run/wayfarer/hostapd
+SUPPLICANT_CONTROL_DIR=/run/wayfarer/supplicant
+
+# Where the tools live. Overridable for a distribution that puts them elsewhere, and for the test
+# suite, which needs a stand-in that can report the argument list it was handed.
+#
+# The control directories above are deliberately **not** overridable. They are the thing this script
+# exists to get right; a knob for them would be the bypass it is written to remove. The binary's
+# location is not a safety property, and conflating the two would be the usual mistake of hardening
+# whatever is nearest rather than whatever matters.
+WAYFARER_SBIN=${WAYFARER_SBIN:-/usr/sbin}
+
+self=${0##*/}
+
+case "$self" in
+  *hostapd_cli) tool=hostapd_cli ;;
+  *wpa_cli)     tool=wpa_cli ;;
+  *)
+    # Invoked under its own name: the tool is the first word. Kept so the script works when it has
+    # been copied somewhere without its symbolic links.
+    if [ "$#" -eq 0 ]; then
+      printf 'usage: %s (hostapd_cli|wpa_cli) [arguments]\n' "$self" >&2
+      printf '  or install it as wayfarer-hostapd_cli / wayfarer-wpa_cli and call those.\n' >&2
+      exit 2
+    fi
+    tool=$1
+    shift
+    ;;
+esac
+
+case "$tool" in
+  hostapd_cli)
+    binary=$WAYFARER_SBIN/hostapd_cli
+    control_dir=$HOSTAPD_CONTROL_DIR
+    ;;
+  wpa_cli)
+    binary=$WAYFARER_SBIN/wpa_cli
+    control_dir=$SUPPLICANT_CONTROL_DIR
+    ;;
+  *)
+    printf '%s: only hostapd_cli and wpa_cli are wrapped, not "%s".\n' "$self" "$tool" >&2
+    exit 2
+    ;;
+esac
+
+# An explicit -p is refused rather than overridden, with the correct value in the message.
+for argument in "$@"; do
+  case "$argument" in
+    -p|-p*)
+      printf '%s: refusing an explicit -p.\n' "$self" >&2
+      printf '  This wrapper exists so the control socket is right without anyone choosing it:\n' >&2
+      printf '    %s\n' "$control_dir" >&2
+      printf '  Drop the -p and run this command again. If you really mean a different socket,\n' >&2
+      printf '  call the tool itself, which is still on PATH under its own name:\n' >&2
+      printf '    %s -p <dir> %s\n' "$binary" "$*" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ ! -x "$binary" ]; then
+  printf '%s: %s is not installed.\n' "$self" "$binary" >&2
+  printf '  hostapd_cli and wpa_cli ship in the hostapd and wpasupplicant packages.\n' >&2
+  exit 127
+fi
+
+# Said, not silently done: the operator should learn the flag exists, because they will one day be on
+# a board without this wrapper. stderr, so it never pollutes output being read by something else.
+printf '%s: using %s -p %s\n' "$self" "$binary" "$control_dir" >&2
+
+# `-i` is not supplied here even though every call needs one. Measured on the bench board with
+# hostapd_cli 2.10: an empty interface argument hangs for ever rather than failing, so a wrapper that
+# invented a default would turn a clear "which interface?" into a hang.
+exec "$binary" -p "$control_dir" "$@"

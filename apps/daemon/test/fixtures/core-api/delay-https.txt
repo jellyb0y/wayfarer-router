@@ -1,0 +1,72 @@
+=== outbound=alive url=https://cp.cloudflare.com/generate_204 timeout=5000
+$ curl -s -w '
+HTTP %{http_code}
+' '127.0.0.1:9090/proxies/alive/delay?url=https%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204&timeout=5000'
+{"delay":76}
+
+HTTP 200
+(wall ms: 81)
+--- sing-box log lines produced:
++0000 2026-09-24 08:03:37 INFO outbound/socks[alive]: outbound connection to cp.cloudflare.com:443
+
+=== outbound=alive url=https://connectivitycheck.gstatic.com/generate_204 timeout=5000
+$ curl -s -w '
+HTTP %{http_code}
+' '127.0.0.1:9090/proxies/alive/delay?url=https%3A%2F%2Fconnectivitycheck.gstatic.com%2Fgenerate_204&timeout=5000'
+{"delay":458}
+
+HTTP 200
+(wall ms: 470)
+--- sing-box log lines produced:
++0000 2026-09-24 08:03:38 INFO outbound/socks[alive]: outbound connection to connectivitycheck.gstatic.com:443
+
+=== outbound=alive url=https://www.msftconnecttest.com/connecttest.txt timeout=5000
+$ curl -s -w '
+HTTP %{http_code}
+' '127.0.0.1:9090/proxies/alive/delay?url=https%3A%2F%2Fwww.msftconnecttest.com%2Fconnecttest.txt&timeout=5000'
+{"message":"An error occurred in the delay test"}
+
+HTTP 503
+(wall ms: 277)
+--- sing-box log lines produced:
++0000 2026-09-24 08:03:40 INFO outbound/socks[alive]: outbound connection to www.msftconnecttest.com:443
+
+=== outbound=alive url=https://detectportal.firefox.com/success.txt timeout=5000
+$ curl -s -w '
+HTTP %{http_code}
+' '127.0.0.1:9090/proxies/alive/delay?url=https%3A%2F%2Fdetectportal.firefox.com%2Fsuccess.txt&timeout=5000'
+{"delay":222}
+
+HTTP 200
+(wall ms: 241)
+--- sing-box log lines produced:
++0000 2026-09-24 08:03:41 INFO outbound/socks[alive]: outbound connection to detectportal.firefox.com:443
+
+=== outbound=alive url=https://www.google.com/generate_204 timeout=5000
+$ curl -s -w '
+HTTP %{http_code}
+' '127.0.0.1:9090/proxies/alive/delay?url=https%3A%2F%2Fwww.google.com%2Fgenerate_204&timeout=5000'
+{"delay":209}
+
+HTTP 200
+(wall ms: 229)
+--- sing-box log lines produced:
++0000 2026-09-24 08:03:42 INFO outbound/socks[alive]: outbound connection to www.google.com:443
+
+=== outbound=alive url=https://10.255.255.1/ timeout=3000
+$ curl -s -w '
+HTTP %{http_code}
+' '127.0.0.1:9090/proxies/alive/delay?url=https%3A%2F%2F10.255.255.1%2F&timeout=3000'
+{"message":"Timeout"}
+
+HTTP 504
+(wall ms: 3021)
+--- sing-box log lines produced:
++0000 2026-09-24 08:03:43 INFO outbound/socks[alive]: outbound connection to 10.255.255.1:443
+
+
+=== supplementary direct probe from the same container (no proxy), explaining the msftconnecttest 503:
+$ curl -s -o /dev/null -m 5 -w "code=%{http_code} redirect=%{redirect_url} ssl_verify=%{ssl_verify_result}\n" https://www.msftconnecttest.com/connecttest.txt
+code=000 redirect= ssl_verify=1
+$ curl -s -o /dev/null -m 5 -w "code=%{http_code}\n" http://www.msftconnecttest.com/connecttest.txt
+code=200

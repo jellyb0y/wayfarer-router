@@ -1,0 +1,348 @@
+#!/bin/bash
+# The bench soak: what the shipped limits are set from.
+#
+# Every default this measures was a guess until it ran, and the point of the exercise is to replace the
+# guesses with numbers **and to label the window they came from**. A figure derived from four hours is
+# worth having as long as it says four hours. One labelled "measured over days" when it was not is the
+# worst thing in this repository's catalogue of failures.
+#
+# ## What it samples, and which shipped default each one decides
+#
+#   memory.current / memory.peak   cgroup v2, not RSS        -> MemoryHigh, MemoryMax
+#   pids.current   / pids.peak     cgroup v2                 -> TasksMax
+#   sectors written to the card    /sys/block/<dev>/stat     -> the write budget; the card is the part
+#                                                              of this device that wears out
+#   NRestarts of the daemon        systemd                   -> whether any limit is being hit
+#   events / transactions rows     the daemon's own database  -> EVENT_RING_SIZE, TRANSACTION_RING_SIZE
+#   database size on disk          stat                      -> both ring sizes, in bytes rather than rows
+#   journal usage                  journalctl                -> RuntimeMaxUse
+#
+# **RSS is deliberately not used.** RSS omits what the kernel charges to the cgroup on this process's
+# behalf — page cache, socket buffers, kernel memory — and it is the cgroup's accounting that decides
+# whether `MemoryMax` kills us. Setting a limit from a number the limit is not enforced against is how a
+# service gets OOM-killed at a value its own monitoring called fine.
+#
+# ## Two measured facts about this image that change the accounting
+#
+#  1. **The card is not always the same device name.** It was seen as `mmcblk0` and later as `mmcblk1`
+#     on the same board. So the device is resolved from what the root filesystem is actually mounted on,
+#     every sample, rather than written down here.
+#  2. **`/var/log` is on zram**, so journal writes cost no card writes at all on this image. A naive
+#     write budget that counted the journal would be wrong in the safe direction, but wrong — and the
+#     interesting consequence is the opposite one: `RuntimeMaxUse` bounds memory here, not card wear.
+#
+# ## The sampler's own cost, which it must not hide
+#
+# Samples are appended to **tmpfs** (`/run`), which touches the card not at all. A compact rollup is
+# appended to the card once an hour so that a reboot costs at most an hour of history, and that append is
+# the sampler's entire footprint: one line, well under one sector. `report` prints it as a correction
+# rather than leaving the reader to wonder.
+#
+# ## Setting it up
+#
+#   scp deploy/bench/wayfarer-soak <device>:/usr/local/sbin/wayfarer-soak
+#   ssh <device> 'chmod 0755 /usr/local/sbin/wayfarer-soak && wayfarer-soak install'
+#   ssh <device> 'wayfarer-soak report'
+#
+# `install` writes both units and enables the timer. They are held in this file rather than in
+# separate ones because the script is what gets copied to a device, and units that travel separately
+# are units that get set up by hand — a measurement nobody can reproduce from this repository, which
+# is a poor property for the instrument the documented limits are derived from.
+#
+# `reset` starts a new window. A window that contains a deploy measures the deploy: the first hour
+# sampled on the bench board reported 35.61 MiB written to the card, almost all of it two deploys and
+# a snapshot, against a steady-state baseline of 650-750 B/s. The window is the number.
+
+set -euo pipefail
+
+RUN_DIR=/run/wayfarer-soak
+SERIES="$RUN_DIR/samples.tsv"
+KEEP_DIR=/var/lib/wayfarer-soak
+KEEP="$KEEP_DIR/rollup.tsv"
+MARK="$RUN_DIR/started-at"
+# When the last card line was written, in seconds since boot. In tmpfs on purpose: see rollup().
+ROLLUP_MARK="$RUN_DIR/last-rollup-uptime"
+UNIT=wayfarer.service
+CGROUP="/sys/fs/cgroup/system.slice/$UNIT"
+
+# Derived, never hardcoded: see the note above about the device name changing.
+card_device() {
+  local source base
+  source="$(findmnt -n -o SOURCE / 2>/dev/null || true)"
+  base="$(basename "${source:-}")"
+  # `mmcblk1p1` -> `mmcblk1`; `sda2` -> `sda`.
+  base="$(printf '%s' "$base" | sed -E 's/p?[0-9]+$//')"
+  [ -n "$base" ] && [ -e "/sys/block/$base/stat" ] && printf '%s' "$base"
+}
+
+read_or_zero() { cat "$1" 2>/dev/null || printf '0'; }
+
+sample() {
+  mkdir -p "$RUN_DIR"
+  # A wall-clock note of when this window began, for a person reading the report. It is **not** what the
+  # window length is computed from -- see report() -- and it says so where it is printed, because an
+  # unlabelled timestamp beside a duration is exactly how the two get confused.
+  [ -f "$MARK" ] || date -u +%s > "$MARK"
+  [ -f "$SERIES" ] || printf 'epoch\tmem_current\tmem_peak\tpids_current\tpids_peak\tcard_sectors_written\trestarts\tdb_bytes\tevents\ttransactions\tjournal_bytes\tunit_started_monotonic\tuptime_seconds\n' > "$SERIES"
+
+  local dev sectors
+  dev="$(card_device || true)"
+  if [ -n "${dev:-}" ]; then
+    # Field 7 of /sys/block/*/stat is sectors written, 512 bytes each, cumulative since boot.
+    sectors="$(awk '{print $7}' "/sys/block/$dev/stat")"
+  else
+    sectors=0
+  fi
+
+  local db_bytes events transactions
+  db_bytes="$(stat -c %s /var/lib/wayfarer/wayfarer.db 2>/dev/null || printf '0')"
+  # Read-only, and through the same runtime the daemon uses. A failure here is a zero rather than a gap:
+  # the row is still worth having for its memory figures.
+  events="$(/usr/local/bin/node -e '
+    try {
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync("/var/lib/wayfarer/wayfarer.db", { readOnly: true });
+      process.stdout.write(String(db.prepare("SELECT count(*) AS n FROM events").get().n));
+    } catch { process.stdout.write("0"); }
+  ' 2>/dev/null || printf '0')"
+  transactions="$(/usr/local/bin/node -e '
+    try {
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync("/var/lib/wayfarer/wayfarer.db", { readOnly: true });
+      process.stdout.write(String(db.prepare("SELECT count(*) AS n FROM transactions").get().n));
+    } catch { process.stdout.write("0"); }
+  ' 2>/dev/null || printf '0')"
+
+  # One conversion per field, and the count is asserted by `report` rather than trusted. bash's
+  # printf *reuses* the format when given more arguments than conversions, so an extra field does
+  # not fail: it silently writes a second line with one value and ten empty columns, and every
+  # statistic computed from the series then averages in a row of zeros. Seen for real when a
+  # twelfth field was added and this format was left at eleven.
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(date -u +%s)" \
+    "$(read_or_zero "$CGROUP/memory.current")" \
+    "$(read_or_zero "$CGROUP/memory.peak")" \
+    "$(read_or_zero "$CGROUP/pids.current")" \
+    "$(read_or_zero "$CGROUP/pids.peak")" \
+    "$sectors" \
+    "$(systemctl show "$UNIT" -p NRestarts --value 2>/dev/null || printf '0')" \
+    "$db_bytes" "$events" "$transactions" \
+    "$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMG]' | head -1 || printf '0')" \
+    "$(systemctl show "$UNIT" -p ActiveEnterTimestampMonotonic --value 2>/dev/null || printf '0')" \
+    "$(awk '{printf "%d", $1}' /proc/uptime)" \
+    >> "$SERIES"
+}
+
+# Once an hour: one line to the card, so a reboot costs at most an hour. This is the sampler's whole
+# card footprint and `report` states it.
+#
+# **Rate-limited here rather than by the timer.** The timer fires every thirty seconds, because the memory
+# series wants that resolution; appending on every fire would put 120 lines an hour on the card while this
+# file's own comment claimed one. A measurement whose stated cost is not its real cost is the failure this
+# whole exercise exists to avoid, so the interval is enforced where the write happens.
+ROLLUP_INTERVAL_SECONDS=3600
+
+rollup() {
+  mkdir -p "$KEEP_DIR"
+  [ -f "$SERIES" ] || return 0
+  [ -f "$KEEP" ] || printf '# one line per hour, appended from the tmpfs series. See wayfarer-soak report.\n' > "$KEEP"
+
+  # The gate is on **uptime**, held in tmpfs, and the failure direction is the point.
+  #
+  # It used to compare the wall clock against the epoch in the last line written to the card. Two things
+  # were wrong with that. The card file survives a reboot, so the comparison crossed boots -- and a
+  # backward clock step of an hour or more stalled rollups entirely, which means a reboot then discarded
+  # the tmpfs series this line exists to preserve. An instrument whose whole output is a series must not
+  # fail towards losing the series.
+  #
+  # The marker is in /run, so after a reboot it is absent and the first rollup happens at once. That is
+  # the correct direction twice over: a reboot is exactly when the last window should be written down,
+  # and erring towards one extra line costs a few dozen bytes against a card budget measured in
+  # megabytes per hour.
+  local now last
+  now="$(awk '{printf "%d", $1}' /proc/uptime)"
+  if [ -f "$ROLLUP_MARK" ]; then
+    last="$(cat "$ROLLUP_MARK" 2>/dev/null || printf '')"
+    if [ -n "${last:-}" ] && [ $((now - last)) -lt "$ROLLUP_INTERVAL_SECONDS" ]; then
+      return 0
+    fi
+  fi
+
+  tail -1 "$SERIES" >> "$KEEP"
+  printf '%s' "$now" > "$ROLLUP_MARK"
+}
+
+# The column count the header declares, asserted against every data row. The failure this guards
+# against printed "card written -38.61 MiB over the window" — a negative quantity of bytes, to two
+# decimal places, from a series half of whose rows were empty. A measuring tool that reports a
+# plausible-looking number from input it could not parse is worse than one that refuses.
+expected_fields() { head -1 "$SERIES" | awk -F'\t' '{print NF}'; }
+
+# Every column `report` reads by position, by name. Checked against the header the series was written
+# with, because a *count* check is not enough: a series from an older sampler had the right number of
+# columns for its own header and no uptime column at all, so the window came out as
+# "0.00 hours of continuous sampling, 132 samples" -- a self-contradictory line, printed rather than
+# refused, which is the same defect this function exists to prevent one level up.
+REQUIRED_COLUMNS="epoch mem_current mem_peak pids_current pids_peak card_sectors_written restarts db_bytes events transactions journal_bytes unit_started_monotonic uptime_seconds"
+
+check_series() {
+  local want bad header missing column
+  want="$(expected_fields)"
+  bad="$(awk -F'\t' -v want="$want" 'NR>1 && NF!=want {print NR": "NF" fields"}' "$SERIES" | head -5)"
+  if [ -n "$bad" ]; then
+    echo "REFUSING to report: the series is malformed, so every statistic from it would be wrong." >&2
+    echo "  the header declares $want columns; these rows disagree:" >&2
+    printf '  %s\n' "$bad" >&2
+    echo "  Fix the sampler, then 'wayfarer-soak reset' to start a window that can be believed." >&2
+    return 1
+  fi
+
+  header="$(head -1 "$SERIES")"
+  missing=""
+  for column in $REQUIRED_COLUMNS; do
+    printf '%s' "$header" | tr '\t' '\n' | grep -qx "$column" || missing="$missing $column"
+  done
+  if [ -n "$missing" ]; then
+    echo "REFUSING to report: this series was written by a different sampler." >&2
+    echo "  columns this report needs and cannot find:$missing" >&2
+    echo "  Run 'wayfarer-soak reset' to start a window this sampler can describe." >&2
+    return 1
+  fi
+}
+
+report() {
+  [ -f "$SERIES" ] || { echo "no samples yet"; return 1; }
+  check_series || return 1
+  local hours rows
+  # The window is measured from the series' own uptime column, not from a wall-clock mark.
+  #
+  # It is printed as "the whole basis for every number below", so a wrong window discredits every figure
+  # in the report -- including the ones the shipped resource limits are set from. This board has no clock
+  # battery and systemd-timesyncd steps the clock after boot, so two `date +%s` readings either side of
+  # that step reported a ninety-six-hour soak from thirty minutes of samples.
+  #
+  # Seconds since boot are comparable here without qualification because the series lives in /run, which
+  # is tmpfs: it cannot survive a reboot, so every row in it is from the same boot by construction. That
+  # is a property worth naming rather than relying on silently.
+  hours="$(awk -F'\t' 'NR>1{ if (first=="") first=$13; last=$13 } END{ printf "%.2f", (last-first)/3600 }' "$SERIES")"
+  rows="$(( $(wc -l < "$SERIES") - 1 ))"
+
+  # More than one sample cannot have been taken in no time at all. The contradiction is derived rather
+  # than assumed sound: it is exactly what a missing or unreadable uptime column produces, and printing
+  # "0.00 hours of continuous sampling, 132 samples" is worse than stopping, because the number below it
+  # gets quoted.
+  if [ "$rows" -gt 1 ] && [ "$(awk -v h="$hours" 'BEGIN{print (h > 0) ? 1 : 0}')" = 0 ]; then
+    echo "REFUSING to report: $rows samples span a window of ${hours} hours, which cannot be true." >&2
+    echo "  The uptime column is missing or unreadable, so no duration can be computed." >&2
+    echo "  Run 'wayfarer-soak reset' to start a window that can be believed." >&2
+    return 1
+  fi
+
+  local began
+  began="$(date -u -d "@$(cat "$MARK" 2>/dev/null || printf 0)" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')"
+
+  echo "=== soak report"
+  echo "window            ${hours} hours of continuous sampling, ${rows} samples"
+  echo "                  (this is the whole basis for every number below; it is not days)"
+  echo "                  measured from the board's uptime, not the wall clock, which on this"
+  echo "                  hardware can step by days after a power cycle"
+  echo "began (wall clock) ${began}  -- a note for a reader; the window above is not computed from it"
+  awk -F'\t' 'NR>1{
+      if (mn=="" || $2<mn) mn=$2; if ($2>mx) mx=$2; sum+=$2; n++;
+      if ($3>peak) peak=$3;
+      if ($5>pidpeak) pidpeak=$5; if ($4>pidmax) pidmax=$4;
+      if (first_sect=="") first_sect=$6; last_sect=$6;
+      if ($7>restarts) restarts=$7;
+      if (first_db=="") first_db=$8; last_db=$8;
+      if ($9>ev) ev=$9; if ($10>tx) tx=$10;
+      if ($12!="" && $12!=last_start) { starts++; last_start=$12 }
+    }
+    END{
+      printf "memory.current    min %.1f MiB, mean %.1f MiB, max %.1f MiB\n", mn/1048576, (sum/n)/1048576, mx/1048576;
+      printf "memory.peak       %.1f MiB   (cgroup accounting, not RSS)\n", peak/1048576;
+      printf "pids              max %d, peak %d\n", pidmax, pidpeak;
+      # Sectors written is cumulative since boot, so it cannot decrease. If it has, the window spans
+      # a reboot or a row was misread, and the difference is not a quantity of writes.
+      if (last_sect < first_sect)
+        printf "card written      UNKNOWN: the counter went backwards (%d -> %d), so this window spans\n                  a reboot or holds a bad row. Not reported as a number.\n", first_sect, last_sect;
+      else
+        printf "card written      %.2f MiB over the window\n", (last_sect-first_sect)*512/1048576;
+      # Two different questions, and reporting only the first is how a window containing a deploy
+      # reads as a window of undisturbed running. NRestarts counts restarts systemd performed after
+      # a failure; it does not count `systemctl restart`, which is what an install does. The start
+      # timestamp changes on every start of any kind, so the count below is derived from the thing
+      # that actually happened.
+      printf "daemon failures   %d   (NRestarts: systemd restarting it after a failure)\n", restarts;
+      printf "daemon starts     %d   (distinct start times seen; a deploy or an apply causes one)\n", starts;
+      if (starts > 1) printf "                  NOTE: the daemon restarted during this window, so memory.current\n                  min and the early samples describe a freshly started process.\n";
+      printf "database          %.1f KiB -> %.1f KiB\n", first_db/1024, last_db/1024;
+      printf "rows              events max %d, transactions max %d\n", ev, tx;
+    }' "$SERIES"
+  echo
+  echo "the sampler's own cost, stated because a measurement that changes what it measures must:"
+  echo "  samples are written to tmpfs (/run) and touch the card not at all"
+  local kept
+  kept="$(grep -vc '^#' "$KEEP" 2>/dev/null || echo 0)"
+  echo "  one rollup line per hour is appended to the card: ${kept} line(s), $(stat -c %s "$KEEP" 2>/dev/null || echo 0) bytes so far"
+  echo "  /var/log is on zram on this image, so journal growth costs no card writes either"
+}
+
+# Start a new window. The point of a soak is a number attached to a stated window, and a window
+# that contains our own deploys measures our own deploys. Resetting is deliberate and says what it
+# discarded, rather than being done by editing files on the device — which would be a measurement
+# nobody could reproduce from this repository.
+reset_window() {
+  local rows=0
+  [ -f "$SERIES" ] && rows="$(( $(wc -l < "$SERIES") - 1 ))"
+  echo "discarding ${rows} samples and starting a new window now"
+  rm -f "$SERIES" "$MARK" "$ROLLUP_MARK"
+  # The rollup on the card is kept on purpose: it is the only part that survives a reboot, and
+  # throwing away history to make the current window look tidy is not a thing a measurement does.
+  echo "kept: $KEEP ($(grep -vc '^#' "$KEEP" 2>/dev/null || echo 0) hourly line(s))"
+  sample
+  echo "new window started; the first sample is in place"
+}
+
+# The units live here rather than in a file somebody copies, because a bench instrument set up by
+# hand on a device is a measurement nobody can reproduce from this repository — and this one produces
+# numbers that end up in the documentation. `install` is idempotent and re-run after every change.
+install_units() {
+  cat > /etc/systemd/system/wayfarer-soak.service <<'UNIT'
+[Unit]
+Description=Wayfarer bench soak sample
+
+[Service]
+Type=oneshot
+# `rollup` takes a sample and, at most once an hour, appends one line to the card. The rate limit is
+# inside the script rather than in a second timer, so the interval and the promise cannot disagree.
+ExecStart=/usr/local/sbin/wayfarer-soak rollup
+UNIT
+  cat > /etc/systemd/system/wayfarer-soak.timer <<'UNIT'
+[Unit]
+Description=Wayfarer bench soak sampling
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now wayfarer-soak.timer
+  # Verified by result, not by the exit code of enable: a timer that is enabled and not running
+  # measures nothing, and this is the instrument the rest of the numbers depend on.
+  printf 'timer: is-active=%s is-enabled=%s\n' \
+    "$(systemctl is-active wayfarer-soak.timer)" "$(systemctl is-enabled wayfarer-soak.timer)"
+  systemctl list-timers wayfarer-soak.timer --no-pager | sed -n '2p'
+}
+
+case "${1:-}" in
+  install) install_units ;;
+  sample) sample ;;
+  rollup) sample; rollup ;;
+  report) report ;;
+  reset) reset_window ;;
+  *) echo "wayfarer-soak install|sample|rollup|report|reset" >&2; exit 2 ;;
+esac

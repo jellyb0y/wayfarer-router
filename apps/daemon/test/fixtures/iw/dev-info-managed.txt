@@ -1,0 +1,7 @@
+Interface wlan0
+	ifindex 4
+	wdev 0x100000001
+	addr aa:bb:cc:00:0b:01
+	ssid bench-uplink
+	type managed
+	wiphy 1

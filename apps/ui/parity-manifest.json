@@ -1,0 +1,510 @@
+{
+  "generatedBy": "apps/ui/src/parity.test.tsx — derived from the rendered DOM, never edited by hand",
+  "screens": [
+    "status",
+    "clients",
+    "events",
+    "network",
+    "routing",
+    "tunnels",
+    "settings"
+  ],
+  "fields": [
+    {
+      "pointer": "/accessPoint/acceptChannelFollowsUplink",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/bind/by",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/bind/value",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/passphrase",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/pinName",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/radio/band",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/radio/channel",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/radio/country",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/radio/hidden",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/radio/width",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/ssid",
+      "screen": "network"
+    },
+    {
+      "pointer": "/accessPoint/takeOverInterface",
+      "screen": "network"
+    },
+    {
+      "pointer": "/dns/direct",
+      "screen": "network"
+    },
+    {
+      "pointer": "/dns/logQueries",
+      "screen": "network"
+    },
+    {
+      "pointer": "/dns/overTunnel",
+      "screen": "network"
+    },
+    {
+      "pointer": "/dns/strategy",
+      "screen": "network"
+    },
+    {
+      "pointer": "/firewall/blockedEndpoints/-/domain",
+      "screen": "network"
+    },
+    {
+      "pointer": "/firewall/blockedEndpoints/-/ipCidr",
+      "screen": "network"
+    },
+    {
+      "pointer": "/firewall/blockedEndpoints/-/note",
+      "screen": "network"
+    },
+    {
+      "pointer": "/firewall/blockedEndpoints/-/ports",
+      "screen": "network"
+    },
+    {
+      "pointer": "/firewall/blockedEndpoints/-/protocol",
+      "screen": "network"
+    },
+    {
+      "pointer": "/firewall/ipv6",
+      "screen": "network"
+    },
+    {
+      "pointer": "/firewall/killSwitch",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/firewall/ntpBypass",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/meta/description",
+      "screen": "settings"
+    },
+    {
+      "pointer": "/meta/name",
+      "screen": "settings"
+    },
+    {
+      "pointer": "/network/cidr",
+      "screen": "network"
+    },
+    {
+      "pointer": "/network/dhcp/enabled",
+      "screen": "network"
+    },
+    {
+      "pointer": "/network/dhcp/from",
+      "screen": "network"
+    },
+    {
+      "pointer": "/network/dhcp/leaseHours",
+      "screen": "network"
+    },
+    {
+      "pointer": "/network/dhcp/to",
+      "screen": "network"
+    },
+    {
+      "pointer": "/policy/excluded",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/onAllDown",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/priority",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/count",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/endpoints",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/failStreak",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/intervalSeconds",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/maxFails",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/maxJitterMs",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/maxLatencyMs",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/probes/maxLossPercent",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/policy/sticky",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/routing/rules/-/action/outbound",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/rules/-/cidrs",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/rules/-/domains",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/rules/-/kind",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/rules/-/sets",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/rules/-/suffixes",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/ruleSets/-/format",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/ruleSets/-/path",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/ruleSets/-/tag",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/ruleSets/-/type",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/ruleSets/-/updateIntervalHours",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/routing/ruleSets/-/url",
+      "screen": "routing"
+    },
+    {
+      "pointer": "/services/clashApi/enabled",
+      "screen": "settings"
+    },
+    {
+      "pointer": "/services/management/onUplinkNetwork",
+      "screen": "network"
+    },
+    {
+      "pointer": "/subscriptions/-/enabled",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/subscriptions/-/name",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/subscriptions/-/refreshHours",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/subscriptions/-/url",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/alpn",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/auth",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/auth/password",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/auth/username",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/encryption",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/browserSignature",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/connections",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/encryptionMethod",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/host",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/name",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/port",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/proxyMethod",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/publicKey",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/serverName",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/streamTimeoutSeconds",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/transport",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/udp",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/entryPoints/-/uid",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/fingerprint",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/flow",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/host",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/id",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/interfaceSuffix",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/network",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/path",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/port",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/profile",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/realityPublicKey",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/realityShortId",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/security",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/server",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/serverName",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/tlsCertificate",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/tlsServerName",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/type",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/dns/domainSuffix",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/dns/dynamic",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/dns/server",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/enabled",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/name",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/onUnavailable",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/protocol",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/resources/domainSuffix",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/resources/ipCidr",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/role",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/uplinks/-/bind/by",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/bind/value",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/address",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/band",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/bssid",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/dhcp",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/dns",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/gateway",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/hidden",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/psk",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/config/ssid",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/enabled",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/id",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/kind",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/pinName",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/priority",
+      "screen": "network"
+    },
+    {
+      "pointer": "/uplinks/-/takeOverInterface",
+      "screen": "network"
+    }
+  ]
+}

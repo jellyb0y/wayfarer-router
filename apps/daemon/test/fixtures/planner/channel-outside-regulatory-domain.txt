@@ -1,0 +1,795 @@
+# scenario: channel-outside-regulatory-domain
+# inventory: restricted-regulatory-domain
+# usable: false
+# blast radius: network
+
+## bindings
+- access-point: bound → wlan0
+
+## findings
+- [error] channel_unavailable at /accessPoint/radio/channel
+    phy0 does not offer channel 149 on 5GHz.
+    hint: Available on this radio in this band: 36, 40.
+- [warning] regulatory_mismatch at /accessPoint/radio/country
+    The profile asks for country DE, but the kernel currently applies 00 to phy0 (the radio's own domain).
+    hint: The driver enforces its own view, so the channels and power limits that apply are the kernel's, not the profile's. Align the two, or expect the stricter of them.
+
+## notes
+- No uplink is configured. This is the default and a valid state: the device serves its local network and reaches nothing beyond it until an uplink is added.
+- Access-point control uses the socket at /run/wayfarer/hostapd. Running hostapd_cli by hand needs `-p /run/wayfarer/hostapd`, or it reports a working access point as absent.
+- The access point requests channel 149. hostapd may come up on a different primary channel within the same block: it scans for neighbours first and swaps the primary and secondary channels to put the secondary where it heard none. The status view reports the channel actually in use, which is the one to trust.
+
+## sysctl
+- net.ipv4.ip_forward=1 — clients on the local network reach the internet through this device
+- net.ipv4.conf.all.rp_filter=2 — a tunnel bound to its own interface would otherwise have its replies discarded by the kernel
+- net.ipv4.conf.default.rp_filter=2 — so an interface a tunnel creates later inherits the same setting
+- net.ipv6.conf.wlan0.accept_ra=0 — no router advertisement is accepted on the interface this device serves
+- net.ipv6.conf.wlan0.disable_ipv6=1 — IPv6 is blocked at the access point: a v6 address on this interface is one clients can reach the internet through, outside the tunnel
+
+## units
+- wf-hostapd@wlan0.service enabled=true active=true — hosts the access point on wlan0
+- wf-dhcp@wlan0.service enabled=true active=true — the address service on wlan0
+- wf-firewall.service enabled=true active=true — loads the generated firewall ruleset
+- wf-firewall-ready.target enabled=true active=true — ordering marker: the generated ruleset is loaded
+- wf-rederive.service enabled=true active=false — re-derives the environment-dependent configuration before the core reads it
+- wf-route-check.service enabled=true active=false — checks that the device can still reach the networks it is on, once the tunnel exists
+- wf-hostapd@.service enabled=false active=false — access point template; the instance is the interface name
+- wf-supplicant@.service enabled=false active=false — wireless client template; the instance is the interface name
+- wf-dhcp@.service enabled=false active=false — address server template; the instance is the interface name
+- wf-openvpn@.service enabled=false active=false — external tunnel daemon template; the instance is the tunnel id
+- wf-transport@.service enabled=false active=false — obfuscation transport template; the instance is the transport id
+- wf-socks@.service enabled=false active=false — external client template; the instance is the tunnel id
+- wf-core.service enabled=true active=true — the proxy core: the data plane
+
+## plan, in apply order
+- write /etc/sysctl.d/90-wayfarer.conf — makes the kernel settings survive a reboot
+- write /etc/wayfarer/core/config.json — the proxy core configuration
+- write /etc/wayfarer/fence.json — which networks in the core exclusion list are followed tunnel networks
+- write /etc/wayfarer/nftables.conf — the firewall ruleset
+- write /etc/wayfarer/hostapd/wlan0.conf — the access point on wlan0
+- write /etc/wayfarer/dhcp/wlan0.conf — hands out addresses on wlan0
+- write /etc/wayfarer/README — says what owns this directory
+- write /usr/local/lib/systemd/system/wf-firewall.service — the unit definition for wf-firewall.service
+- write /usr/local/lib/systemd/system/wf-firewall-ready.target — the unit definition for wf-firewall-ready.target
+- write /usr/local/lib/systemd/system/wf-rederive.service — the unit definition for wf-rederive.service
+- write /usr/local/lib/systemd/system/wf-route-check.service — the unit definition for wf-route-check.service
+- write /usr/local/lib/systemd/system/wf-hostapd@.service — the unit definition for wf-hostapd@.service
+- write /usr/local/lib/systemd/system/wf-supplicant@.service — the unit definition for wf-supplicant@.service
+- write /usr/local/lib/systemd/system/wf-dhcp@.service — the unit definition for wf-dhcp@.service
+- write /usr/local/lib/systemd/system/wf-openvpn@.service — the unit definition for wf-openvpn@.service
+- write /usr/local/lib/systemd/system/wf-transport@.service — the unit definition for wf-transport@.service
+- write /usr/local/lib/systemd/system/wf-socks@.service — the unit definition for wf-socks@.service
+- write /usr/local/lib/systemd/system/wf-core.service — the unit definition for wf-core.service
+- write /etc/systemd/network/10-wayfarer-lan.network — addressing for the local network on wlan0
+- set net.ipv4.ip_forward to 1 (was 0) — clients on the local network reach the internet through this device
+- set net.ipv4.conf.all.rp_filter to 2 (was unset) — a tunnel bound to its own interface would otherwise have its replies discarded by the kernel
+- set net.ipv4.conf.default.rp_filter to 2 (was unset) — so an interface a tunnel creates later inherits the same setting
+- set net.ipv6.conf.wlan0.accept_ra to 0 (was unset) — no router advertisement is accepted on the interface this device serves
+- set net.ipv6.conf.wlan0.disable_ipv6 to 1 (was unset) — IPv6 is blocked at the access point: a v6 address on this interface is one clients can reach the internet through, outside the tunnel
+- enable wf-hostapd@wlan0.service — hosts the access point on wlan0
+- start wf-hostapd@wlan0.service — hosts the access point on wlan0. the wireless network this device offers comes up; nothing is connected to it yet
+- enable wf-dhcp@wlan0.service — the address service on wlan0
+- start wf-dhcp@wlan0.service — the address service on wlan0
+- install wf-firewall.service — loads the generated firewall ruleset
+- enable wf-firewall.service — loads the generated firewall ruleset
+- start wf-firewall.service — loads the generated firewall ruleset
+- install wf-firewall-ready.target — ordering marker: the generated ruleset is loaded
+- enable wf-firewall-ready.target — ordering marker: the generated ruleset is loaded
+- start wf-firewall-ready.target — ordering marker: the generated ruleset is loaded
+- install wf-rederive.service — re-derives the environment-dependent configuration before the core reads it
+- enable wf-rederive.service — re-derives the environment-dependent configuration before the core reads it
+- install wf-route-check.service — checks that the device can still reach the networks it is on, once the tunnel exists
+- enable wf-route-check.service — checks that the device can still reach the networks it is on, once the tunnel exists
+- install wf-hostapd@.service — access point template; the instance is the interface name
+- install wf-supplicant@.service — wireless client template; the instance is the interface name
+- install wf-dhcp@.service — address server template; the instance is the interface name
+- install wf-openvpn@.service — external tunnel daemon template; the instance is the tunnel id
+- install wf-transport@.service — obfuscation transport template; the instance is the transport id
+- install wf-socks@.service — external client template; the instance is the tunnel id
+- install wf-core.service — the proxy core: the data plane
+- enable wf-core.service — the proxy core: the data plane
+- start wf-core.service — the proxy core: the data plane
+
+## generated files
+
+### /etc/sysctl.d/90-wayfarer.conf (mode 644)
+purpose: makes the kernel settings survive a reboot
+```
+# Generated by Wayfarer from the profile "Wrong channel".
+# Edits here are overwritten on the next apply. Change the profile instead.
+#
+# These are applied live on every apply as well. This file is what makes them survive a
+# reboot, which the running kernel does not.
+
+# clients on the local network reach the internet through this device
+net.ipv4.ip_forward = 1
+
+# a tunnel bound to its own interface would otherwise have its replies discarded by the kernel
+net.ipv4.conf.all.rp_filter = 2
+
+# so an interface a tunnel creates later inherits the same setting
+net.ipv4.conf.default.rp_filter = 2
+
+# no router advertisement is accepted on the interface this device serves
+net.ipv6.conf.wlan0.accept_ra = 0
+
+# IPv6 is blocked at the access point: a v6 address on this interface is one clients can reach the internet through, outside the tunnel
+net.ipv6.conf.wlan0.disable_ipv6 = 1
+```
+
+### /etc/systemd/network/10-wayfarer-lan.network (mode 644)
+purpose: addressing for the local network on wlan0
+```
+# Generated by Wayfarer from the profile "Wrong channel".
+# Edits here are overwritten on the next apply. Change the profile instead.
+
+[Match]
+Name=wlan0
+
+[Network]
+Address=10.44.0.1/24
+IPForward=yes
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+
+[Link]
+RequiredForOnline=no
+```
+
+### /etc/wayfarer/core/config.json (mode 600)
+purpose: the proxy core configuration
+```
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "tcp",
+        "tag": "dns-tunnel",
+        "server": "1.1.1.1",
+        "detour": "wf-selector"
+      },
+      {
+        "type": "local",
+        "tag": "dns-direct"
+      }
+    ],
+    "rules": [],
+    "final": "dns-tunnel",
+    "strategy": "ipv4_only"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "wf-lan",
+      "address": [
+        "172.19.0.1/30"
+      ],
+      "auto_route": true,
+      "route_exclude_address": [
+        "10.44.0.0/24",
+        "172.19.0.0/30",
+        "192.0.2.0/24"
+      ],
+      "strict_route": false,
+      "stack": "system"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "wf-selector",
+      "outbounds": [
+        "block"
+      ],
+      "interrupt_exist_connections": false
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "ip_cidr": [
+          "172.19.0.0/30",
+          "192.0.2.0/24"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "domain": [
+          "cp.cloudflare.com",
+          "connectivitycheck.gstatic.com"
+        ],
+        "source_ip_cidr": [
+          "172.19.0.0/30"
+        ],
+        "outbound": "block"
+      },
+      {
+        "ip_cidr": [
+          "10.44.0.1/24",
+          "127.0.0.0/8"
+        ],
+        "outbound": "direct"
+      }
+    ],
+    "final": "wf-selector",
+    "auto_detect_interface": true,
+    "default_domain_resolver": {
+      "server": "dns-direct"
+    },
+    "default_mark": 487
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090"
+    },
+    "cache_file": {
+      "enabled": true,
+      "path": "/var/lib/wayfarer/core-cache.db"
+    }
+  }
+}
+```
+
+### /etc/wayfarer/dhcp/wlan0.conf (mode 644)
+purpose: hands out addresses on wlan0
+```
+# Generated by Wayfarer from the profile "Wrong channel".
+# Edits here are overwritten on the next apply. Change the profile instead.
+
+# Read only this file. Include-directory scanning is not used, so a stray file in a
+# shared directory cannot reach this instance — this device shares a namespace with
+# nothing.
+conf-dir=
+
+# This device answers DNS for its clients, on this interface only, and forwards every query
+# upstream. dnsmasq drops privileges to `nobody`, so its upstream packets are NOT marked as
+# the device's own traffic: the core's tun captures them, its DNS rule hijacks them, and they
+# resolve under whatever tunnel policy is in force. Measured: the query traverses tun0 and
+# comes back answered. See the generator.
+#
+# An earlier revision set `port=0` here and advertised this device as the resolver anyway, on
+# the basis that the core would answer. It cannot: the core captures FORWARDED traffic, and a
+# query addressed to this device is input. Clients had an address, a route, and a resolver
+# that answered nothing.
+no-resolv
+server=1.1.1.1
+
+# No second cache. A stale answer from a layer nobody remembers is read as a broken tunnel.
+cache-size=0
+
+# Bound to one interface, and bind-interfaces rather than bind-dynamic: with several
+# services on this device, a wildcard bind is how two of them end up fighting over the
+# same socket and the loser fails at start-up rather than at configuration time.
+interface=wlan0
+bind-interfaces
+except-interface=lo
+
+dhcp-range=10.44.0.100,10.44.0.200,255.255.255.0,12h
+
+# Option 3: the router. Option 6: the resolver — this device, where the core answers.
+dhcp-option=3,10.44.0.1
+dhcp-option=6,10.44.0.1
+
+# No IPv6 is offered at all. IPv6 reaching the internet directly while the tunnel
+# carries only IPv4 leaks the real address of every client, and it does so invisibly
+# because pages still load. The firewall rejects it as well; this stops it being
+# offered in the first place.
+dhcp-option=option6:dns-server
+ra-param=*,0,0
+
+dhcp-leasefile=/var/lib/wayfarer/dhcp.leases
+dhcp-authoritative
+
+# A client that asks for a hostname gets no domain appended: this device serves one
+# subnet with no local naming, and a made-up domain suffix is a name that resolves
+# somewhere unexpected the moment the device is behind a real one.
+expand-hosts
+```
+
+### /etc/wayfarer/fence.json (mode 600)
+purpose: which networks in the core exclusion list are followed tunnel networks
+```
+{
+  "followed": []
+}
+```
+
+### /etc/wayfarer/hostapd/wlan0.conf (mode 600)
+purpose: the access point on wlan0
+```
+# Generated by Wayfarer from the profile "Wrong channel".
+# Edits here are overwritten on the next apply. Change the profile instead.
+# Radio: phy0. Capabilities below are what this driver published, not defaults.
+
+interface=wlan0
+driver=nl80211
+
+# Without a control interface there is no way to read access-point state or see a client
+# arrive. An access point that produces no events looks exactly like an idle one.
+ctrl_interface=/run/wayfarer/hostapd
+ctrl_interface_group=0
+
+ssid=Wayfarer
+country_code=DE
+ieee80211d=1
+ignore_broadcast_ssid=0
+
+hw_mode=a
+channel=149
+
+ieee80211n=1
+wmm_enabled=1
+ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40][TX-STBC][RX-STBC1][DSSS_CCK-40]
+ieee80211ac=1
+vht_capab=[MAX-MPDU-7991][RXLDPC][SHORT-GI-80][TX-ANTENNA-PATTERN]
+vht_oper_chwidth=1
+vht_oper_centr_freq_seg0_idx=154
+
+# WPA2 and WPA3 together with CCMP only: TKIP caps the whole network at 54 Mbit/s and is
+# broken. sae_require_mfp with the mixed mode lets a WPA3 client get management-frame
+# protection without excluding a WPA2 one.
+wpa=2
+wpa_key_mgmt=WPA-PSK SAE
+wpa_pairwise=CCMP
+rsn_pairwise=CCMP
+ieee80211w=1
+sae_require_mfp=1
+wpa_passphrase=a-passphrase-for-the-test
+
+# The driver's own limit, not a policy of ours.
+max_num_sta=16
+```
+
+### /etc/wayfarer/nftables.conf (mode 600)
+purpose: the firewall ruleset
+```
+# Generated by Wayfarer from the profile "Wrong channel".
+# Edits here are overwritten on the next apply. Change the profile instead.
+
+#
+# Only the table below is touched. Tables belonging to other software on this device —
+# including the one a proxy core creates for redirection — are left exactly as they are.
+
+table inet wayfarer {}
+delete table inet wayfarer
+
+table inet wayfarer {
+  chain input {
+    type filter hook input priority filter; policy accept;
+    ct state established,related accept
+    iif lo accept
+
+    # The access point always reaches the management interface, even with the kill-switch
+    # active: that is an input decision and the kill-switch acts on forward. Written as an
+    # explicit rule so the guarantee is in the ruleset rather than inferred.
+    iifname "wlan0" tcp dport 8088 accept
+
+    # A tunnel is never a management surface. Not a setting, and deliberately not one.
+    iifname "tun*" tcp dport 8088 reject with tcp reset
+    iifname "wg*" tcp dport 8088 reject with tcp reset
+
+    # IPv6 is rejected at the access point, not merely left unrouted. A tunnel carrying
+    # only IPv4 while IPv6 reaches the internet directly leaks the real address of every
+    # client, and invisibly, because pages still load. Rejected rather than dropped so a
+    # client falls back to IPv4 at once instead of waiting out a timeout.
+    iifname "wlan0" meta nfproto ipv6 icmpv6 type { nd-router-advert, nd-router-solicit } drop
+    iifname "wlan0" meta nfproto ipv6 reject with icmpv6 admin-prohibited
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+
+    # Clamp the segment size to the path MTU. A tunnel lowers the effective MTU and the
+    # symptom of not clamping is that small requests work and large ones hang, which is
+    # diagnosed as "the internet is slow" rather than as a configuration fault.
+    tcp flags syn tcp option maxseg size set rt mtu
+
+    # See the input chain: rejected, not dropped, and at the access point.
+    meta nfproto ipv6 reject with icmpv6 admin-prohibited
+
+    # The kill-switch is off. With no tunnel configured yet, a kill-switch on makes a
+    # working device look broken, so it is a switch rather than a policy baked in.
+
+  }
+
+  chain output {
+    type route hook output priority mangle; policy accept;
+
+    # Time synchronisation is labelled by DESTINATION PORT and not by user, and the policy
+    # rule that acts on it is installed by the firewall unit using the same ports.
+    # By port because the time service does not run as root, so a rule written in
+    # terms of the root user misses it entirely — and this failure is self-locking:
+    # correcting a wrong clock needs a time query, and transports that authenticate on a
+    # timestamp refuse to connect while the clock is wrong. Every tunnel then looks
+    # broken while every direct connection works.
+    udp dport { 123 } meta mark set 0x1e7
+    tcp dport { 123 } meta mark set 0x1e7
+
+    # A label on the device's own traffic. **It does not route anything by itself, and the
+    # routing is not done here.** Keeping the tunnel off this traffic is the job of the policy
+    # rules the firewall unit installs, which select on user and destination port.
+    #
+    # That split is a measurement, not a preference. A policy rule matching this mark was tried
+    # and broke the device's own networking outright: the source address is chosen on the FIRST
+    # route lookup, before this chain runs and therefore before the mark exists, so the packet
+    # already carried the tunnel's own address — and the reroute a mark triggers keeps a source
+    # that is still local. Packets left the physical interface with an address the upstream
+    # cannot reply to. A mark cannot fix a source that has already been chosen.
+    #
+    # It is kept because it is a true statement about the packet that costs nothing, and the
+    # proxy core is free to use it. Nothing in this project routes on it.
+    meta skuid 0 meta mark set 0x1e7
+  }
+
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    # No uplink is configured, which is a valid and expected state: there is nothing to
+    # translate towards. The chain exists so the ruleset shape does not change when one
+    # is added, which keeps the diff between the two states small and readable.
+  }
+}
+```
+
+### /etc/wayfarer/README (mode 644)
+purpose: says what owns this directory
+```
+# Generated by Wayfarer from the profile "Wrong channel".
+# Edits here are overwritten on the next apply. Change the profile instead.
+#
+# Everything under this directory is generated from the active profile and is replaced on every
+# apply. Editing a file here has no lasting effect: change the profile instead.
+#
+# Units generated alongside these files are named wf-*, and are owned exclusively. Units this
+# device did not generate are never started, stopped or removed by it.
+```
+
+### /usr/local/lib/systemd/system/wf-core.service (mode 644)
+purpose: the unit definition for wf-core.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Runs the proxy core against the generated configuration, and nothing else.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer proxy core
+Requires=wf-firewall-ready.target
+Requires=wf-rederive.service
+After=network.target wf-firewall-ready.target wf-rederive.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sing-box run -c /etc/wayfarer/core/config.json -D /var/lib/wayfarer/core
+ExecStartPre=/usr/bin/sing-box check -c /etc/wayfarer/core/config.json
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/wayfarer
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-dhcp@.service (mode 644)
+purpose: the unit definition for wf-dhcp@.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Hands out addresses on the interface named by the instance. Resolver disabled.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer address service on %I
+After=wf-hostapd@%i.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device systemd-networkd.service
+Requires=wf-firewall-ready.target
+After=wf-firewall-ready.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq -k --conf-file=/etc/wayfarer/dhcp/%i.conf
+Restart=on-failure
+RestartSec=2
+StateDirectory=wayfarer
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-firewall-ready.target (mode 644)
+purpose: the unit definition for wf-firewall-ready.target
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Reached once the generated firewall ruleset has been loaded.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer firewall is in place
+Requires=wf-firewall.service
+After=wf-firewall.service
+RefuseManualStart=no
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-firewall.service (mode 644)
+purpose: the unit definition for wf-firewall.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Loads the generated nftables ruleset. Our table only; nothing else is flushed.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer firewall ruleset
+DefaultDependencies=no
+After=sysinit.target
+Before=network-pre.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/sbin/nft -c -f /etc/wayfarer/nftables.conf
+ExecStart=/usr/sbin/nft -f /etc/wayfarer/nftables.conf
+ExecStartPost=/bin/sh -c 'while /usr/sbin/ip rule del priority 8000 2>/dev/null; do :; done; /usr/sbin/ip rule add priority 8000 uidrange 0-0 iif lo lookup main'
+ExecStartPost=/bin/sh -c 'while /usr/sbin/ip rule del priority 8001 2>/dev/null; do :; done; /usr/sbin/ip rule add priority 8001 ipproto udp dport 123 iif lo lookup main'
+ExecStartPost=/bin/sh -c 'while /usr/sbin/ip rule del priority 8002 2>/dev/null; do :; done; /usr/sbin/ip rule add priority 8002 ipproto tcp dport 123 iif lo lookup main'
+# No ExecStop: see the generator comment. Stopping this unit must not remove the rules, and
+# nothing here may flush a ruleset that other software has tables in.
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-hostapd@.service (mode 644)
+purpose: the unit definition for wf-hostapd@.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Hosts the access point on the interface named by the instance.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer access point on %I
+StartLimitIntervalSec=60
+StartLimitBurst=5
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device systemd-networkd.service
+Requires=wf-firewall-ready.target
+After=wf-firewall-ready.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/hostapd /etc/wayfarer/hostapd/%i.conf
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=wayfarer/hostapd
+RuntimeDirectoryPreserve=yes
+# See the generator comment: neither ProtectSystem=strict nor PrivateTmp can be used here.
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-openvpn@.service (mode 644)
+purpose: the unit definition for wf-openvpn@.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Runs one external tunnel. Pulled routes are ignored; the pushed resolver is captured.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer tunnel %I
+StartLimitIntervalSec=60
+StartLimitBurst=5
+After=network-online.target wf-firewall-ready.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/openvpn --config /etc/wayfarer/openvpn/%i.conf --route-noexec --pull-filter ignore redirect-gateway --up /opt/wayfarer/bin/tunnel-up --up-restart --script-security 2 --setenv WAYFARER_TUNNEL %i
+Restart=always
+RestartSec=5
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SETGID CAP_SETUID
+NoNewPrivileges=yes
+StateDirectory=wayfarer
+RuntimeDirectory=wayfarer/openvpn
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-rederive.service (mode 644)
+purpose: the unit definition for wf-rederive.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Refreshes the generated values that were read off this device, before the core starts.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer environment re-derivation
+After=network-online.target systemd-networkd-wait-online.service
+Wants=network-online.target
+Before=wf-core.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/way rederive
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-route-check.service (mode 644)
+purpose: the unit definition for wf-route-check.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# After the core is up: no address this device holds may route into the tunnel.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer self-reachability check
+After=wf-core.service
+Wants=wf-core.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/way check-routes --stop-core-on-capture --wait-for-tunnel 30
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-socks@.service (mode 644)
+purpose: the unit definition for wf-socks@.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Runs an external client that the core reaches over a local SOCKS port.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer external client %I
+StartLimitIntervalSec=60
+StartLimitBurst=5
+After=network-online.target
+Wants=network-online.target
+Before=wf-core.service
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /etc/wayfarer/socks/%i.sh
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-supplicant@.service (mode 644)
+purpose: the unit definition for wf-supplicant@.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Associates the interface named by the instance with somebody else's access point.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer wireless uplink on %I
+StartLimitIntervalSec=60
+StartLimitBurst=5
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+After=wf-firewall-ready.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/wpa_supplicant -s -D nl80211 -i %I -c /etc/wayfarer/supplicant/%i.conf
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=wayfarer/supplicant
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### /usr/local/lib/systemd/system/wf-transport@.service (mode 644)
+purpose: the unit definition for wf-transport@.service
+```
+# Generated by Wayfarer. Edits here are overwritten on the next apply.
+#
+# Runs one obfuscation transport, listening locally for a tunnel to connect to.
+#
+# This unit is owned exclusively by Wayfarer: nothing else on this device installs, starts or
+# stops it, and Wayfarer does the same for units it did not generate.
+
+[Unit]
+Description=Wayfarer transport %I
+StartLimitIntervalSec=60
+StartLimitBurst=5
+After=network-online.target
+Wants=network-online.target
+Before=wf-openvpn@.service
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /etc/wayfarer/transport/%i.sh
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/wayfarer
+
+[Install]
+WantedBy=multi-user.target
+```
+

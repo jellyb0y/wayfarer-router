@@ -1,0 +1,23 @@
+phy#1
+	Unnamed/non-netdev interface
+		wdev 0x100000002
+		addr aa:bb:cc:00:0b:02
+		type P2P-device
+	Interface wlan0
+		ifindex 4
+		wdev 0x100000001
+		addr aa:bb:cc:00:0b:01
+		ssid bench-uplink
+		type managed
+phy#0
+	Interface wlanap
+		ifindex 3
+		wdev 0x1
+		addr aa:bb:cc:00:0a:01
+		ssid bench-ap
+		type AP
+		channel 149 (5745 MHz), width: 80 MHz, center1: 5775 MHz
+		txpower 3.00 dBm
+		multicast TXQ:
+			qsz-byt	qsz-pkt	flows	drops	marks	overlmt	hashcol	tx-bytes	tx-packets
+			0	0	2671	0	0	0	0	831934		2678

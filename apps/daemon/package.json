@@ -1,0 +1,31 @@
+{
+  "name": "@wayfarer/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "WAYFARER_SERIALISER_CHECK=1 node --test --experimental-strip-types --experimental-sqlite test/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.2",
+    "@fastify/rate-limit": "11.2.0",
+    "@fastify/static": "10.1.4",
+    "@fastify/swagger": "9.8.1",
+    "@fastify/type-provider-typebox": "6.1.0",
+    "@sinclair/typebox": "0.34.52",
+    "@wayfarer/field-meta": "workspace:*",
+    "@wayfarer/protocols": "workspace:*",
+    "@wayfarer/schemas": "workspace:*",
+    "dbus-native": "0.15.2",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.12.5",
+    "pino": "9.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.1",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

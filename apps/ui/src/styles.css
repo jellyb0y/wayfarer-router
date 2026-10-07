@@ -1,0 +1,585 @@
+/*
+ * Plain CSS, no framework, no web fonts fetched at runtime.
+ *
+ * The interface is served from an SD card over Wi-Fi to a phone, sometimes while the uplink is
+ * down, so everything is local and the stylesheet is small enough that a utility framework would
+ * be the larger half of the bundle.
+ */
+:root {
+  --bg: #12151a;
+  --panel: #191d24;
+  --panel-2: #20252e;
+  --line: #2b323d;
+  --text: #e6e9ee;
+  --muted: #98a2b3;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --bad: #f85149;
+  --accent: #58a6ff;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); }
+
+.layout { display: flex; min-height: 100vh; flex-direction: column; }
+
+header.top {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  position: sticky; top: 0; z-index: 10; flex-wrap: wrap;
+}
+
+header.top .brand { font-weight: 600; letter-spacing: 0.02em; }
+header.top .spacer { flex: 1; }
+header.top .state { color: var(--muted); font-size: 13px; }
+
+nav.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+nav.tabs a {
+  padding: 6px 12px; border-radius: 6px; text-decoration: none; color: var(--muted);
+}
+nav.tabs a.active { background: var(--panel-2); color: var(--text); }
+
+main { padding: 16px; display: grid; gap: 16px; max-width: 1100px; width: 100%; margin: 0 auto; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.card h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+tr:last-child td { border-bottom: none; }
+
+.kv { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 4px 12px; font-size: 14px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+.pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.pill.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+.pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+
+.note { background: var(--panel-2); border-left: 3px solid var(--warn); padding: 8px 12px; border-radius: 4px; font-size: 14px; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+form.auth { max-width: 380px; margin: 10vh auto; display: grid; gap: 12px; }
+input, button, select {
+  font: inherit; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text);
+}
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: #07101f; border-color: transparent; font-weight: 600; }
+.error { color: var(--bad); font-size: 14px; }
+
+pre.log { margin: 0; max-height: 420px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+pre.log .p3 { color: var(--bad); }
+pre.log .p4 { color: var(--warn); }
+
+@media (max-width: 560px) {
+  main { padding: 10px; }
+  .kv { grid-template-columns: 1fr; }
+}
+
+/*
+ * **Below 360 px the chrome gives the words back their room.**
+ *
+ * Measured at 320 px on 2026-09-21: a 206-character hardware note the device itself supplies was
+ * painting seven line boxes in a **270 px** box — fifty pixels of the viewport spent on the padding
+ * of a screen inside a card inside a fold, three of them nesting. The text is not ours to cut: it
+ * arrives from the daemon and says what a radio can do, and a bench fed shorter values is a bench
+ * that proves nothing. So the room comes from the layout, which is where it was being spent.
+ *
+ * 320 px is not a hypothetical: it is a phone that is still sold, and it is also what a 360 px phone
+ * becomes at the first step of browser zoom — which is what somebody does when the text is small,
+ * which is what this repository has been asked to fix.
+ */
+@media (max-width: 360px) {
+  main.screen { padding: 8px; gap: 10px; }
+  .card { padding: 10px; }
+  .fold-body { padding: 0 8px 10px; }
+  .note { padding: 8px 10px; }
+  .panel { padding: 10px; }
+  /*
+   * A fold inside a fold does not indent again. Nesting is a relationship, and on a phone paying for
+   * it twice in horizontal space costs the words that explain the thing being folded — which on
+   * Settings is the device's own hardware warnings, text the daemon writes and this screen must
+   * render whole.
+   */
+  .fold-body .fold-body { padding-left: 0; padding-right: 0; }
+  .fold-body .fold { border-left: none; border-right: none; border-radius: 0; }
+}
+
+/* ── the configuration surfaces ──────────────────────────────────────────────────────────── */
+
+.panel {
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+.panel.ok { border-color: #2f6f4f; }
+.panel.warn { border-color: #8a6d1f; }
+.panel.danger { border-color: #8a2f2f; }
+.panel h3 { margin: 0 0 6px; font-size: 1rem; }
+.sub-panel {
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 4px;
+  padding: 10px;
+  margin: 10px 0;
+}
+
+.field { margin: 8px 0; display: flex; flex-direction: column; gap: 3px; }
+.field label { font-size: 0.85rem; }
+.row { display: flex; align-items: center; gap: 8px; }
+/* `.field` is a column; a `.field.row` must say so, or a checkbox stacks above its own label —
+   which is what it did, and it read as a stray tick mark floating over unrelated text. */
+.field.row { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.row.wrap { flex-wrap: wrap; }
+.spacer { flex: 1; }
+.required { color: #c98b3b; font-size: 0.75rem; font-weight: normal; }
+.small { font-size: 0.8rem; }
+.ok { color: #6fbf8f; }
+.warn-text { color: #d4a24a; }
+.hint { color: #9fc4e8; font-size: 0.9rem; }
+.badge {
+  font-size: 0.7rem;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+}
+
+fieldset { border: 1px solid var(--line, #2a2f3a); border-radius: 4px; margin: 10px 0; padding: 8px 12px; }
+legend { font-size: 0.85rem; padding: 0 4px; }
+
+button.link { background: none; border: none; color: #9fc4e8; cursor: pointer; padding: 0; text-decoration: underline; }
+
+table.list { width: 100%; border-collapse: collapse; }
+table.list th, table.list td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, #2a2f3a); vertical-align: top; }
+table.list tr.active { background: rgba(111, 191, 143, 0.08); }
+
+/* The plan review, and the pending bar. Both are read under time pressure, so they are the two
+   surfaces where legibility is a safety property rather than a preference. */
+ol.diff, ul.diff, ol.steps, ol.rules { margin: 6px 0; padding-left: 20px; }
+ol.diff li, ul.diff li, ol.steps li { margin: 3px 0; font-size: 0.9rem; }
+ol.steps li.danger { color: #e08a8a; }
+ol.rules li { margin: 10px 0; }
+ol.rules li.anchor { border-left: 3px solid #6fbf8f; padding-left: 8px; }
+.finding { margin: 8px 0; padding-left: 8px; border-left: 2px solid currentColor; }
+.plan-review .actions { display: flex; gap: 8px; margin: 12px 0; }
+
+.pending-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-top: 16px;
+  background: var(--bg, #14171d);
+  border-top: 1px solid var(--line, #2a2f3a);
+}
+
+.secret { display: flex; align-items: center; gap: 8px; }
+.generated-form { margin: 8px 0; }
+main { padding: 16px 24px 0; }
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════
+   Built at 360 px (Epic E)
+
+   Everything below is written for the narrowest screen first and given room above it. The four
+   defects the owner reported were each the same mistake repeated: a table that cannot fit, a value
+   that overflows, a target too small to hit, and a paragraph where a label belongs.
+   ════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * The single most common cause of a page that scrolls sideways.
+ *
+ * A grid or flex child defaults to `min-width: auto`, which is its *content's* minimum — so one
+ * unbreakable token, a 253-character domain or a base64 key, pushes its column wider than the
+ * viewport and takes the whole page with it. The child never reports this; the page just scrolls.
+ * Declaring it here fixes the class rather than the instance.
+ */
+.screen > *, .card > *, .rows > *, .row-fields > *, .grid > *, .kv > *, .row > * { min-width: 0; }
+
+/*
+ * Values wrap inside their box rather than widening it. This is the opposite of what `LongValue`
+ * does, and deliberately so: a description or a reason is prose and may wrap anywhere, while a key
+ * or an address must not be broken at all and is truncated instead.
+ */
+dd, td, .row-field dd { overflow-wrap: anywhere; }
+
+/* ── touch ───────────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * 44 px is a floor, not a height: a control may be taller. Applied to the elements rather than to a
+ * class, because a target that is too small to hit is too small whoever wrote it.
+ */
+button, input, select, textarea, summary, .row-open {
+  min-height: 44px;
+}
+input, select, textarea { width: 100%; max-width: 100%; }
+/* Anything below 16 px makes a phone browser zoom the page on focus, and the zoom is what leaves the
+   layout scrolled sideways afterwards — the overflow is created by the act of typing. */
+input, select, textarea { font-size: 16px; }
+
+/* ── the screen frame ────────────────────────────────────────────────────────────────────── */
+
+main.screen {
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+}
+.screen-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.screen-head h1 { margin: 0; font-size: 20px; line-height: 1.2; }
+.screen-action { margin-left: auto; }
+
+/* ── rows instead of tables ──────────────────────────────────────────────────────────────── */
+
+ul.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+
+.row-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  display: grid;
+  gap: 6px;
+}
+.row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.row-title { font-weight: 600; overflow-wrap: anywhere; }
+.row-badge { margin-left: auto; flex: none; }
+
+/* The whole row is the target, not a chevron at its end. */
+.row-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.row-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+/*
+ * A row carries its own labels. That is the whole reason this is not a table: there is no header
+ * row to scroll away from, so a row read halfway down a long list still says what its values are.
+ */
+.row-fields { margin: 0; display: grid; gap: 4px 12px; font-size: 14px; }
+/*
+ * **Stacked at 360 px, side by side when there is room** — which is what `RowList` has always
+ * claimed and the rule this file is built on, and it was the other way round.
+ *
+ * A fixed 9 em label column left the value 142 px wide at a 360 px viewport, and a 123-character
+ * refusal sentence painted **seven line boxes** in it, measured 2026-09-21. That is the phone-as-a-
+ * breakpoint mistake in one line of CSS: the two-column shape is the desktop's, and squeezing it
+ * into a phone is how a value ends up in a column narrower than its own words.
+ */
+.row-field { display: grid; gap: 2px; }
+.row-field dt { color: var(--muted); }
+.row-field dd { margin: 0; min-width: 0; }
+
+/* Actions are always drawn. Nothing appears on hover: a phone has no hover, and a control that only
+   exists under a pointer is a control most readers will never find. */
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ── long values ─────────────────────────────────────────────────────────────────────────── */
+
+.long-value { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.long-value-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * A sentence that *carries* a long value, cut after a stated number of lines rather than after one.
+ *
+ * `-webkit-line-clamp` is the only way a browser will cut at a line boundary; the prefix is the
+ * standard spelling everywhere, including in browsers that have not been WebKit for a decade. The
+ * whole value stays in the tooltip and in the copy control beside it, so the cut costs nothing that
+ * one tap does not return.
+ */
+.long-value-text[data-lines] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+button.copy {
+  flex: none;
+  min-height: 44px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── folding ─────────────────────────────────────────────────────────────────────────────── */
+
+details.fold { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+details.fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+  list-style: none;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: '▸'; flex: none; }
+details.fold[open] > summary::before { content: '▾'; }
+.fold-count { margin-left: auto; font-size: 12px; }
+.fold-body { padding: 0 12px 12px; display: grid; gap: 8px; }
+
+/* ── room above the phone ────────────────────────────────────────────────────────────────── */
+
+@media (min-width: 640px) {
+  main.screen { padding: 16px; gap: 16px; }
+  /* Two columns of label/value, which is room being used rather than a different layout. */
+  .row-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* And the label beside its value rather than above it, for the same reason and in the same place. */
+  .row-field { grid-template-columns: minmax(0, 9em) minmax(0, 1fr); gap: 8px; }
+}
+
+/* ── the verdict ─────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * The first thing on the first screen, and the only element allowed to state a conclusion.
+ *
+ * Colour is never the only signal: the word says which state this is, so it survives a reader who
+ * cannot distinguish the colours and a phone screen in daylight.
+ */
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 17px;
+}
+.verdict.ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok); }
+.verdict.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); }
+.verdict.bad { border-color: color-mix(in srgb, var(--bad) 45%, transparent); color: var(--bad); }
+.verdict.unknown { color: var(--muted); }
+.verdict .muted { margin-left: auto; }
+
+/* ── filters ─────────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * A stack at 360 px, because a filter row that wraps mid-control puts a select under its own label
+ * and reads as two settings. The label sits above its control for the same reason.
+ */
+.filters { display: grid; gap: 8px; margin: 8px 0; }
+.filters label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
+.filters p { margin: 0; font-size: 13px; }
+
+@media (min-width: 640px) {
+  .filters { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: end; }
+}
+
+/* ── the journal ─────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * Vertical scrolling only. A journal line is prose and may be broken anywhere without changing what
+ * it says — unlike a key or an address, which is why those are truncated instead of wrapped. A pane
+ * that scrolled sideways would be the table-that-does-not-fit wearing a different element.
+ */
+.journal {
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  gap: 6px;
+}
+.journal-line {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.journal-line.p3 { color: var(--bad); }
+.journal-line.p4 { color: var(--warn); }
+
+/* ── controls that carry their own pointer ───────────────────────────────────────────────── */
+
+.field-block { display: grid; gap: 4px; margin: 10px 0; min-width: 0; }
+.field-block > label { display: grid; gap: 4px; min-width: 0; }
+.field-label { font-size: 13px; color: var(--muted); }
+.field-help { margin: 0; font-size: 13px; }
+.field-block textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+
+.rule-editor {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  min-width: 0;
+}
+
+/* The preview is prose about what the rules produce; it wraps rather than scrolling sideways. */
+ol.preview { margin: 6px 0; padding-left: 20px; display: grid; gap: 6px; }
+ol.preview li { font-size: 14px; overflow-wrap: anywhere; }
+
+/* ── the rule list ───────────────────────────────────────────────────────────────────────── */
+
+ol.rule-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.rule-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.rule-item > * { min-width: 0; }
+
+/*
+ * A checkbox is a box, not a field a value is typed into.
+ *
+ * `input { width: 100% }` above is written for the controls that hold a value, and it reaches every
+ * input including this one. Stretched across its grid column the checkbox reports content wider than
+ * its own box — measured at 360 px on Chrome 153, three nested elements flagged, about 4 px each — which
+ * is how a page starts scrolling sideways. It keeps its intrinsic width and sits at the start of the
+ * column; the 44 px floor stays, because the floor is about the target and not about the paint.
+ */
+.field-block input[type='checkbox'] {
+  width: auto;
+  justify-self: start;
+}
+
+/* ── a choice that states its consequence ────────────────────────────────────────────────── */
+
+/*
+ * The shape rule 4 asks for: the sentence saying what happens lives inside the option, not in a
+ * paragraph above the group. Laid out as a grid so the radio keeps one column and the two lines of
+ * text share the other — a radio in normal flow puts its sentence beside it and the sentence then
+ * hangs under the button on a second line, which reads as belonging to nothing.
+ */
+fieldset.choices { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width: 0; }
+fieldset.choices > legend { padding: 0; }
+
+.choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  min-width: 0;
+}
+.choice:has(input:checked) { border-color: var(--accent); }
+.choice-title { font-weight: 600; font-size: 14px; }
+.choice-consequence { grid-column: 2; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.choice-consequence.contradiction { grid-column: 1 / -1; color: var(--warn); }
+
+/*
+ * A radio is a button, not a box a value is typed into — the same defect the checkbox rule above
+ * records, in the other control. `input { width: 100% }` reaches it too, and stretched across its
+ * grid column it reports content wider than its own box, which is how a page starts scrolling
+ * sideways. The 44 px floor is on the label, which is the actual target.
+ */
+.choice input[type='radio'] { width: auto; justify-self: start; }
+.choice { min-height: 44px; }
+.leak-policy { display: grid; gap: 12px; }
+.leak-policy .field.row input[type='checkbox'] { width: auto; }
+
+/* ── a credential, shown as a state ──────────────────────────────────────────────────────── */
+
+.secret-state { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.secret-state > input, .secret-state > textarea { flex: 1 1 12ch; }
+.secret-state > button { flex: none; }
+
+/* ── the tunnel list ─────────────────────────────────────────────────────────────────────── */
+
+/* The same block as a routing rule, for the same reason: a tunnel carries an editor, a row does not. */
+ol.tunnel-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+ol.entry-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.tunnel-item, .entry-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.tunnel-item > *, .entry-item > * { min-width: 0; }
+/* An entry point sits inside a tunnel's own block, so it steps back rather than repeating the fill. */
+.entry-item { background: var(--panel); }
+
+/*
+ * The line that says the editing screens are pointed at a profile this device is not running.
+ *
+ * Full width and above the content rather than inside a card, because it is true of the whole screen
+ * and not of one section of it — and it is a `note`, which already carries the warning colour, so the
+ * only thing added here is the row layout and the room its link needs.
+ */
+.editing-elsewhere {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 16px;
+}
+.editing-elsewhere a { min-height: 44px; display: inline-flex; align-items: center; }
+
+/*
+ * The one place a long value is wrapped rather than truncated.
+ *
+ * Rule 6 says long values never break the layout, and its remedy everywhere else is truncation with a
+ * copy control — because the values it is about are addresses, keys and fingerprints, whose meaning a
+ * break destroys. This one carries a **profile name**, which is a label nobody retypes, and
+ * truncating it would hide which profile is being edited: the only thing the sentence is for.
+ *
+ * `anywhere` rather than `break-word` on purpose. A 64-character name with no space and no hyphen in
+ * it — which is what people actually type — has no break opportunity at all, and `break-word` leaves
+ * it whole and overflowing. Measured: the first draft of this notice made the bench page 504 px wide
+ * at a 360 px viewport.
+ */
+.editing-note { overflow-wrap: anywhere; min-width: 0; }
+.editing-elsewhere span { min-width: 0; }
+
+/* ── a button that states its consequence ────────────────────────────────────────────────── */
+
+/*
+ * The label and the sentence saying what it costs, in one target. A consequence in a paragraph above a
+ * button is read by the people who read paragraphs; one inside the button is read by the thumb that
+ * presses it. Left-aligned and wrapping, because the sentence is the longest thing on the control and
+ * a phone is where it is read.
+ */
+button.consequential {
+  display: grid; gap: 2px; width: 100%; max-width: 100%; min-width: 0;
+  text-align: left; white-space: normal; padding: 8px 12px;
+}
+button.consequential.danger { border-color: #8a2f2f; }
+button.consequential:disabled { cursor: default; opacity: 0.85; }
+.consequential-title { font-weight: 600; }
+.consequential-text { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.consequential-pair { display: grid; gap: 8px; }

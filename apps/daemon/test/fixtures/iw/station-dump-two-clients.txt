@@ -1,0 +1,64 @@
+Station aa:bb:cc:00:0d:01 (on wlanap)
+	inactive time:	32 ms
+	rx bytes:	1412427
+	rx packets:	10068
+	tx bytes:	27119945
+	tx packets:	19891
+	tx retries:	0
+	tx failed:	0
+	rx drop misc:	0
+	signal:  	-78 [-81, -81] dBm
+	signal avg:	-77 [-80, -80] dBm
+	tx bitrate:	234.0 MBit/s VHT-MCS 3 80MHz VHT-NSS 2
+	tx duration:	4703487 us
+	rx bitrate:	175.5 MBit/s VHT-MCS 4 80MHz VHT-NSS 1
+	rx duration:	505296 us
+	last ack signal:-79 dBm
+	avg ack signal:	-77 dBm
+	airtime weight: 256
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	147 seconds
+	associated at [boottime]:	9612.073s
+	associated at:	1789845527463 ms
+	current time:	1789845674871 ms
+Station aa:bb:cc:00:0d:02 (on wlanap)
+	inactive time:	39488 ms
+	rx bytes:	1779
+	rx packets:	24
+	tx bytes:	1082
+	tx packets:	11
+	tx retries:	0
+	tx failed:	0
+	rx drop misc:	0
+	signal:  	-85 [-88, -87] dBm
+	signal avg:	-84 [-88, -86] dBm
+	tx bitrate:	26.0 MBit/s MCS 3
+	tx duration:	27472 us
+	rx bitrate:	39.0 MBit/s MCS 4
+	rx duration:	6583 us
+	last ack signal:-82 dBm
+	avg ack signal:	-83 dBm
+	airtime weight: 256
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	short
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	DTIM period:	2
+	beacon interval:100
+	short slot time:yes
+	connected time:	49 seconds
+	associated at [boottime]:	9710.722s
+	associated at:	1789845626112 ms
+	current time:	1789845674871 ms

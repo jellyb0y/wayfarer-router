@@ -1,0 +1,10 @@
+#!/bin/bash
+# A stand-in for `journalctl -o json` that answers with two entries and then stops answering,
+# without exiting — the shape of a read that will be killed by its own timeout.
+#
+# It exists because that failure is invisible in the output: two valid JSON lines and then silence
+# look exactly like a short log, which is how a page cut short came to be reported as complete.
+set -euo pipefail
+printf '{"__CURSOR":"c001","__REALTIME_TIMESTAMP":"1700000001000000","_BOOT_ID":"bootid","PRIORITY":"6","MESSAGE":"entry 001"}\n'
+printf '{"__CURSOR":"c002","__REALTIME_TIMESTAMP":"1700000002000000","_BOOT_ID":"bootid","PRIORITY":"6","MESSAGE":"entry 002"}\n'
+sleep 30

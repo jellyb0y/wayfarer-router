@@ -1,0 +1,22 @@
+--- encoded cp.cloudflare url
+{"delay":423}
+
+HTTP 200
+--- unencoded cp.cloudflare url
+{"delay":430}
+
+HTTP 200
+--- timeout=50
+{"message":"Timeout"}
+
+HTTP 504
+wall ms: 66
+--- no url param
+{"delay":401}
+
+HTTP 200
+--- log lines
++0000 2026-09-24 07:59:56 INFO outbound/socks[alive]: outbound connection to www.gstatic.com:443
++0000 2026-09-24 07:59:57 INFO outbound/socks[alive]: outbound connection to www.gstatic.com:443
++0000 2026-09-24 07:59:57 INFO outbound/socks[alive]: outbound connection to www.gstatic.com:443
++0000 2026-09-24 07:59:57 INFO outbound/socks[alive]: outbound connection to www.gstatic.com:443

@@ -1,0 +1,238 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "dns-tunnel",
+        "detour": "wf-selector",
+        "server": "1.1.1.1"
+      },
+      {
+        "type": "local",
+        "tag": "dns-direct"
+      },
+      {
+        "type": "udp",
+        "tag": "dns-corp",
+        "detour": "corp",
+        "server": "10.122.0.1"
+      },
+      {
+        "type": "udp",
+        "tag": "dns-hq",
+        "detour": "hq",
+        "server": "10.184.100.5"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [
+          "corp.internal"
+        ],
+        "server": "dns-corp"
+      },
+      {
+        "domain_suffix": [
+          "hq.lan"
+        ],
+        "server": "dns-hq"
+      }
+    ],
+    "final": "dns-tunnel",
+    "strategy": "ipv4_only"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "wf-lan",
+      "address": [
+        "172.19.0.1/30"
+      ],
+      "auto_route": true,
+      "route_exclude_address": [
+        "10.44.0.0/24",
+        "172.19.0.0/30",
+        "10.136.0.0/24",
+        "10.165.0.0/20",
+        "192.168.77.0/24"
+      ],
+      "strict_route": false,
+      "stack": "system"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "corp",
+      "bind_interface": "wfvpncrp"
+    },
+    {
+      "type": "direct",
+      "tag": "partner",
+      "bind_interface": "wfvpnprt"
+    },
+    {
+      "type": "socks",
+      "tag": "relay",
+      "server": "127.0.0.1",
+      "server_port": 10808
+    },
+    {
+      "type": "direct",
+      "tag": "hq",
+      "bind_interface": "wfvpnhq"
+    },
+    {
+      "type": "selector",
+      "tag": "wf-selector",
+      "outbounds": [
+        "direct"
+      ]
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    },
+    {
+      "type": "selector",
+      "tag": "wf-guard-corp",
+      "outbounds": [
+        "corp",
+        "block"
+      ]
+    },
+    {
+      "type": "selector",
+      "tag": "wf-guard-partner",
+      "outbounds": [
+        "partner",
+        "block"
+      ]
+    },
+    {
+      "type": "selector",
+      "tag": "wf-guard-relay",
+      "outbounds": [
+        "relay",
+        "block"
+      ]
+    },
+    {
+      "type": "selector",
+      "tag": "wf-guard-hq",
+      "outbounds": [
+        "hq",
+        "block"
+      ]
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "ip_cidr": [
+          "172.19.0.0/30",
+          "10.136.0.0/24",
+          "10.165.0.0/20",
+          "10.44.0.0/24",
+          "192.168.77.0/24"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "domain": [
+          "stun.l.google.com",
+          "stun1.l.google.com",
+          "stun2.l.google.com",
+          "stun3.l.google.com",
+          "stun4.l.google.com",
+          "stun.services.mozilla.com"
+        ],
+        "outbound": "block"
+      },
+      {
+        "domain": [
+          "cp.cloudflare.com",
+          "connectivitycheck.gstatic.com"
+        ],
+        "source_ip_cidr": [
+          "172.19.0.0/30"
+        ],
+        "outbound": "block"
+      },
+      {
+        "ip_cidr": [
+          "10.44.0.1/24",
+          "127.0.0.0/8"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "outbound": "direct",
+        "inbound": [
+          "wfwan0"
+        ]
+      },
+      {
+        "domain_suffix": [
+          "corp.internal"
+        ],
+        "ip_cidr": [
+          "10.148.0.0/16",
+          "10.122.0.0/24"
+        ],
+        "outbound": "wf-guard-corp"
+      },
+      {
+        "domain_suffix": [
+          "partner.example"
+        ],
+        "ip_cidr": [
+          "203.0.113.176/32",
+          "198.51.100.111/32",
+          "172.30.0.212/32",
+          "203.0.113.179/32",
+          "203.0.113.185/32"
+        ],
+        "outbound": "wf-guard-partner"
+      },
+      {
+        "domain_suffix": [
+          "service-a.example",
+          "service-c.example",
+          "service-b.example",
+          "2ip.ru",
+          "whoerip.com"
+        ],
+        "outbound": "wf-guard-relay"
+      },
+      {
+        "domain_suffix": [
+          "hq.lan"
+        ],
+        "ip_cidr": [
+          "10.0.0.0/8",
+          "192.168.0.0/16"
+        ],
+        "outbound": "wf-guard-hq"
+      }
+    ],
+    "final": "wf-selector",
+    "auto_detect_interface": true,
+    "default_mark": 487
+  }
+}

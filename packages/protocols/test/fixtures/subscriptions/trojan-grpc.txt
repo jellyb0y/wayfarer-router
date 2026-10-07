@@ -1,0 +1,1 @@
+trojan://not-a-real-trojan-password@trojan.example.com:8443?security=tls&sni=trojan.example.com&type=grpc&path=%2FGunService#Example%20Trojan%20gRPC

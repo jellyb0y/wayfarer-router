@@ -1,0 +1,7 @@
+Connected to aa:bb:cc:00:0c:01 (on wlan0)
+	SSID: bench-uplink
+	freq: 5220.0
+	RX: 1888232334 bytes (1969975 packets)
+	TX: 359837657 bytes (863575 packets)
+	signal: -49 dBm
+	tx bitrate: 390.0 MBit/s VHT-MCS 9 80MHz VHT-NSS 1

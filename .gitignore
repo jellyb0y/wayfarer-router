@@ -1,0 +1,31 @@
+# Agent instruction file — local only, deliberately not committed.
+CLAUDE.md
+
+# Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.pnpm-store/
+
+# Local state and secrets
+.env
+.env.*
+*.local
+secrets/
+*.pem
+*.key
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Build output
+apps/daemon/dist/
+apps/ui/dist/
+*.tsbuildinfo
+
+# The harvest the parity test writes when it disagrees with the committed manifest. It exists to be
+# diffed against `apps/ui/parity-manifest.json`, never to replace it.
+apps/ui/parity-manifest.actual.json

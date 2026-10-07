@@ -1,0 +1,21 @@
+{
+  "name": "wayfarer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "pnpm run build:daemon && pnpm run build:ui",
+    "build:daemon": "pnpm --filter @wayfarer/daemon run build",
+    "build:ui": "pnpm --filter @wayfarer/ui run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "deploy": "./scripts/deploy.sh"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

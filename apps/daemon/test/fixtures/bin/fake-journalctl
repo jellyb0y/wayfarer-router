@@ -1,0 +1,59 @@
+#!/bin/bash
+# A stand-in for `journalctl -o json`, written to behave like the real one in the way that matters:
+#
+#   * it prints oldest first;
+#   * `-n N` is **tail-anchored** — it prints the LAST N of whatever matched, which is precisely the
+#     behaviour that made forward paging skip the middle;
+#   * `--after-cursor X` prints everything after X, in order, with no limit of its own.
+#
+# It emits a fixed run of 20 entries so a test can ask for pages smaller than the whole and check
+# that consecutive pages are adjacent. Nothing here talks to a real journal.
+
+set -euo pipefail
+
+TOTAL=20
+after=""
+lines=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --after-cursor) after="$2"; shift ;;
+    -n) lines="$2"; shift ;;
+    *) ;;
+  esac
+  shift
+done
+
+emit() {
+  local index="$1"
+  printf '{"__CURSOR":"c%03d","__REALTIME_TIMESTAMP":"%d","_BOOT_ID":"bootid","PRIORITY":"6","_SYSTEMD_UNIT":"fake.service","MESSAGE":"entry %03d"}\n' \
+    "$index" "$((1700000000000000 + index * 1000000))" "$index"
+}
+
+start=1
+if [ -n "$after" ]; then
+  # Everything strictly after the given cursor. `10#` forces base ten: the cursors are zero-padded,
+  # and shell arithmetic reads a leading zero as octal — `016 + 1` is 15, which showed up as pages
+  # that overlapped by one entry and looked exactly like a paging bug in the code under test.
+  start=$(( 10#${after#c} + 1 ))
+fi
+
+all=()
+# Guarded rather than left to `seq`: BSD seq counts DOWN when the first number is larger than the
+# second (`seq 21 20` prints "21 20"), while GNU seq prints nothing. Without the guard the
+# past-the-end page came back with two entries in descending order, which reads exactly like a bug
+# in the code under test.
+if [ "$start" -le "$TOTAL" ]; then
+  for i in $(seq "$start" "$TOTAL"); do
+    all+=("$i")
+  done
+fi
+
+if [ "$lines" -gt 0 ] && [ "${#all[@]}" -gt "$lines" ]; then
+  # Tail-anchored, exactly like the real tool: keep the LAST N.
+  all=("${all[@]: -$lines}")
+fi
+
+for i in ${all+"${all[@]}"}; do
+  emit "$i"
+done

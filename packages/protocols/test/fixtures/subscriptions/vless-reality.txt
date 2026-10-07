@@ -1,0 +1,1 @@
+vless://11111111-2222-3333-4444-555555555555@reality.example.com:443?encryption=none&security=reality&sni=www.example.org&pbk=not-a-real-public-key&sid=ab&flow=xtls-rprx-vision&type=tcp#Example%20REALITY

@@ -1,0 +1,12 @@
+{
+  "followed": [
+    {
+      "network": "10.165.0.0/20",
+      "interface": "wfvpnhq"
+    },
+    {
+      "network": "10.136.0.0/24",
+      "interface": "wfvpnprt"
+    }
+  ]
+}

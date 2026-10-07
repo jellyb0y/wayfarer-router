@@ -1,0 +1,114 @@
+#!/bin/sh
+# Run by OpenVPN when a tunnel comes up. It captures the pushed resolver and the peer's gateway, and does
+# nothing else.
+#
+# ## Why a script at all
+#
+# The tunnel's routing is decided by the proxy core, not by the peer: the generated client
+# configuration carries `route-noexec`, `route-nopull` and `pull-filter ignore` for redirects and
+# routes, because a server pushing a default-route redirect takes over routing and several tunnels then
+# fight over it, and one pushing a large private range captures the management network.
+#
+# But a pushed **resolver** is different in kind. It is not a claim on the routing table, it is the only
+# way to resolve names that exist solely inside that tunnel, and it usually changes between
+# reconnections depending on which gateway answered. So it is captured here and read by the daemon
+# rather than applied by OpenVPN.
+#
+# ## Everything here treats the peer as hostile
+#
+# `foreign_option_*` is text supplied by whoever is on the other end of the tunnel. It reaches this
+# script as environment variables, and this script is run by OpenVPN as root. So:
+#
+#   * nothing is ever `eval`ed, and no value reaches a shell as a command;
+#   * only `dhcp-option DNS <ipv4>` is recognised, and the address is matched against a strict pattern
+#     rather than parsed;
+#   * anything else the peer pushes is written to a `.rejected` file, for a person to look at, rather
+#     than being silently dropped — a server pushing something unexpected is worth knowing about;
+#   * the output file is written with a fixed name derived from the tunnel id OpenVPN was started with,
+#     never from anything the peer said.
+#
+# OpenVPN calls this with the interface as $1. The tunnel id comes from the environment, set by the
+# unit, because the interface name is ours and the id is what the daemon indexes by.
+
+set -eu
+
+STATE_DIR=/run/wayfarer/tunnel
+TUNNEL_ID="${WAYFARER_TUNNEL:-}"
+
+# No id means this script was run by something that is not our unit. Do nothing rather than guess:
+# writing a file under a name we invented is how a daemon comes to read somebody else's tunnel.
+[ -n "$TUNNEL_ID" ] || exit 0
+
+# The id is ours and matches the identifier rules, but it is checked anyway because it names a path.
+case "$TUNNEL_ID" in
+  *[!a-zA-Z0-9_-]*) exit 0 ;;
+esac
+
+mkdir -p "$STATE_DIR"
+resolvers=""
+rejected=""
+
+# OpenVPN numbers the pushed options from 1. `foreign_option_1`, `foreign_option_2`, and so on.
+index=1
+while :; do
+  eval "value=\${foreign_option_${index}:-}"
+  [ -n "${value:-}" ] || break
+  index=$((index + 1))
+
+  # Only this one shape is understood. Compared as whole words, so a value like
+  # "dhcp-option DNS 1.2.3.4; rm -rf /" does not match and is reported instead.
+  option_kind=$(printf '%s' "$value" | cut -d' ' -f1)
+  option_name=$(printf '%s' "$value" | cut -d' ' -f2)
+  option_value=$(printf '%s' "$value" | cut -d' ' -f3)
+  extra=$(printf '%s' "$value" | cut -d' ' -f4-)
+
+  if [ "$option_kind" = "dhcp-option" ] && [ "$option_name" = "DNS" ] && [ -z "$extra" ]; then
+    # A dotted quad, digits only, four parts. Not a full range check: this is a filter that keeps
+    # anything which is not an address out of a file the daemon will read, not an address validator.
+    if printf '%s' "$option_value" | grep -Eq '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+      resolvers="${resolvers}${option_value}
+"
+      continue
+    fi
+  fi
+  rejected="${rejected}${value}
+"
+done
+
+# Written through a temporary file and renamed, so a reader never sees half of one. The daemon may be
+# reading this at any moment: a tunnel coming up is not a quiet time.
+umask 022
+printf '%s' "$resolvers" > "$STATE_DIR/.$TUNNEL_ID.dns.tmp"
+mv -f "$STATE_DIR/.$TUNNEL_ID.dns.tmp" "$STATE_DIR/$TUNNEL_ID.dns"
+
+# The gateway the peer pushed, for the liveness echo (apps/daemon/src/core/liveness.ts). OpenVPN exports
+# it as `route_vpn_gateway` only because the generated configuration carries a route of its own that is
+# never installed; see catalogue/ovpn.ts for the measurement. It is set by OpenVPN from the pushed
+# `route-gateway` (or the point-to-point peer), not copied from peer text, but it is filtered the same
+# way as the resolver because it names a ping target.
+#
+# Written through a rename on every connect, so each connection is a new inode: that is how the daemon
+# tells "has this gateway answered on this connection" without a clock. Removed when the peer gave
+# none, so a gateway from an earlier connection is never echoed as though it were this one's.
+gateway="${route_vpn_gateway:-}"
+if printf '%s' "$gateway" | grep -Eq '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+  printf '%s\n' "$gateway" > "$STATE_DIR/.$TUNNEL_ID.gateway.tmp"
+  mv -f "$STATE_DIR/.$TUNNEL_ID.gateway.tmp" "$STATE_DIR/$TUNNEL_ID.gateway"
+else
+  rm -f "$STATE_DIR/$TUNNEL_ID.gateway"
+fi
+
+if [ -n "$rejected" ]; then
+  printf '%s' "$rejected" > "$STATE_DIR/.$TUNNEL_ID.rejected.tmp"
+  mv -f "$STATE_DIR/.$TUNNEL_ID.rejected.tmp" "$STATE_DIR/$TUNNEL_ID.rejected"
+  # To the journal, because this is the line that explains a tunnel behaving oddly.
+  printf 'wayfarer: peer on %s pushed options this device does not apply: %s\n' \
+    "$TUNNEL_ID" "$(printf '%s' "$rejected" | tr '\n' ';')" >&2
+else
+  rm -f "$STATE_DIR/$TUNNEL_ID.rejected"
+fi
+
+# Deliberately no route handling of any kind. `route-noexec` in the generated configuration means
+# OpenVPN will not install the peer's routes, and this script must not install them either — the whole
+# point of the arrangement is that the core decides routing.
+exit 0

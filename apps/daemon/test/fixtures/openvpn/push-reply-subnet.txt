@@ -1,0 +1,1 @@
+2026-09-24 07:52:58 PUSH: Received control message: 'PUSH_REPLY,redirect-gateway def1,dhcp-option DNS 77.88.8.8,dhcp-option DNS 8.8.8.8,route-gateway 10.136.0.1,topology subnet,ping 15,ping-restart 120,ifconfig 10.136.0.2 255.255.255.0,peer-id 0,cipher AES-256-GCM,protocol-flags cc-exit tls-ekm dyn-tls-crypt,tun-mtu 1500'

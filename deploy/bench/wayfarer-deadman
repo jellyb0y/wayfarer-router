@@ -1,0 +1,601 @@
+#!/bin/bash
+# Bench safety net: restore the last known-good network configuration and reboot
+# unless disarmed in time.
+#
+# This is deliberately plain shell driven by a transient systemd timer, with no
+# dependency on the Wayfarer daemon, its runtime or its database. The situation it
+# exists for is exactly the one where that code is dead, half-installed, or looping:
+# a development board reachable only over the network it just reconfigured, with no
+# serial console and no clean way back.
+#
+# Usage:
+#   wayfarer-deadman snapshot          record the current configuration as good
+#   wayfarer-deadman arm [minutes]     fire in N minutes (default 5) unless disarmed
+#   wayfarer-deadman disarm            cancel an armed deadman
+#   wayfarer-deadman status            armed or not, time left, snapshot age, mask state
+#   wayfarer-deadman release           undo the daemon mask a fire leaves behind
+#   wayfarer-deadman fire              what the timer runs: restore, mask the daemon, reboot
+#
+# Limitation, stated because it is a real cost and not a theoretical one: the
+# restore makes each snapshotted directory match the snapshot exactly, so a file
+# added to one of those directories by anything else after the snapshot was taken
+# is deleted by a fire. Every deleted path is recorded in last-fire.json.
+
+set -euo pipefail
+
+STATE_DIR=/var/lib/wayfarer-deadman
+SNAPSHOT="$STATE_DIR/good.tar"
+MANIFEST="$STATE_DIR/manifest.json"
+FIRE_RECORD="$STATE_DIR/last-fire.json"
+ARMED_RECORD="$STATE_DIR/armed.json"
+LOCK="$STATE_DIR/lock"
+UNIT=wayfarer-deadman
+BACKSTOP_UNIT=wayfarer-deadman-backstop
+# How far past the recorded deadline an armed timer is still unremarkable: AccuracySec
+# is 1s, and firing, restoring and rebooting take a few seconds more.
+DRIFT_GRACE_SECONDS=20
+BACKSTOP_SECONDS=60
+DEFAULT_MINUTES=5
+
+# The daemon this safety net exists to be independent of.
+#
+# A fire MASKS it before rebooting, and that is the principle rather than a precaution: the deadman's
+# job is to return the device to a state a human can reach, and if the thing that locked the operator
+# out is our own software, restoring the network and then starting that software again returns the
+# board to the state it was just rescued from. A recovery that leaves the cause running is not a
+# recovery. So the boot path is cleared as well as the configuration, and the fire record says
+# exactly how to undo it.
+MANAGED_UNIT=wayfarer.service
+
+# The prefix of every unit Wayfarer generates. A fire masks these too, and that is not an extra
+# precaution — it is the difference between a recovery that works and one that loops.
+#
+# Measured on the bench board, 2026-09-20. A profile moved the access point onto the radio carrying the
+# SSH session; access was lost; the deadman fired, restored /etc/netplan, masked wayfarer.service and
+# rebooted. The board came back for about ninety seconds and vanished again — because
+# `wf-hostapd@wlan0.service` was still **enabled**, started at boot, and took the radio a second time.
+#
+# The lesson generalises past this incident. Masking the daemon stops the *control plane* from
+# re-applying a configuration; it does nothing about the *data plane* units that already hold the
+# hardware, because those are deliberately independent of the daemon so that a configuration survives a
+# reboot without it. That independence is correct, and it is exactly what makes them the thing a rescue
+# has to stop.
+#
+# Masked rather than disabled: a mask survives anything calling `enable`, including our own installer
+# and our own daemon if somebody unmasks that first.
+OWNED_PREFIX=wf-
+
+# The configuration that decides whether this board is reachable. Directories are
+# restored to match the snapshot exactly; plain files are copied back.
+# /etc/resolv.conf is deliberately absent: on this board it is a symlink into
+# /run, so its content is regenerated at boot and snapshotting the target would
+# restore a stale resolver. The manifest records what it was at snapshot time.
+SNAPSHOT_DIRS=(
+  /etc/netplan
+  /etc/systemd/network
+  /etc/systemd/resolved.conf.d
+  /etc/hostapd
+  /etc/wpa_supplicant
+  /etc/dnsmasq.d
+)
+SNAPSHOT_FILES=(
+  /etc/nftables.conf
+)
+
+die() { printf 'wayfarer-deadman: %s\n' "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+
+# Masks a unit and then **reads back whether it is masked**.
+#
+# The exit code of `systemctl mask` is not the question. Measured on the bench board: with a unit file
+# sitting at /etc/systemd/system/<unit>, masking is refused outright — and the partial behaviour is what
+# makes verification essential rather than pedantic. A template *instance* masks fine, because nothing
+# occupies its path; the template itself, every plain unit and the daemon do not:
+#
+#   # systemctl mask wf-hostapd@wlan0.service   → Created symlink … → /dev/null   (works)
+#   # systemctl mask wf-hostapd@.service        → Failed: File … already exists
+#   # systemctl mask wayfarer.service           → Failed: File … already exists
+#
+# So a rescue that trusted the call would have masked the instances and silently left the daemon and every
+# other unit enabled — a partial rescue that looks complete, which is worse than an obvious failure.
+#
+# This is the same rule this project has already learned twice in other forms: a directive in the wrong
+# section is accepted and ignored, and a validation step that consumes no result reports a check that never
+# happened. **A rescue step must verify its own effect, not its own exit code.**
+mask_verified() {
+  local unit="$1"
+  systemctl stop "$unit" >/dev/null 2>&1 || true
+  systemctl mask "$unit" >/dev/null 2>&1 || true
+  [ "$(systemctl is-enabled "$unit" 2>/dev/null || true)" = masked ]
+}
+
+json_string() {
+  # Escape a value for embedding in JSON. printf %s through sed is enough here:
+  # the values are file paths and command output, never binary.
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | tr -d '\r\n'
+}
+
+timer_armed() {
+  # A transient timer that has already fired is gone, so "armed" means the timer
+  # unit exists and is active.
+  [ "$(systemctl is-active "$UNIT.timer" 2>/dev/null || true)" = active ]
+}
+
+seconds_left() {
+  # Measured on systemd 257.13: `systemctl show -p NextElapseUSecMonotonic` prints a
+  # rendered timespan ("3h 36min 23.335852s") in spite of the property name, and
+  # NextElapseUSecRealtime is empty for a monotonic timer. Neither is safe to do
+  # arithmetic on, so the deadline recorded at arm time is read here instead. That is
+  # only sound because `arm` sets OnBootSec to exactly this number of seconds since
+  # boot, so the record is not a copy of the deadline — it *is* the deadline, and the
+  # drift check in `cmd_status` exists to catch the day that stops being true. It is
+  # kept against the monotonic clock because this board has no clock battery and its
+  # wall clock can jump by days after a power cycle.
+  local fire_at now
+  [ -f "$ARMED_RECORD" ] || return 1
+  fire_at=$(sed -n 's/.*"fireAtUptime": \([0-9]*\).*/\1/p' "$ARMED_RECORD" | head -1)
+  [ -n "${fire_at:-}" ] || return 1
+  now=$(awk '{printf "%d", $1}' /proc/uptime)
+  echo $(( fire_at - now ))
+}
+
+require_root() { [ "$(id -u)" = 0 ] || die "must run as root"; }
+
+ensure_state_dir() {
+  mkdir -p "$STATE_DIR"
+  chmod 0700 "$STATE_DIR"
+}
+
+# --- snapshot ---------------------------------------------------------------
+
+cmd_snapshot() {
+  require_root
+  ensure_state_dir
+  # Refuse while armed: an armed deadman means the current configuration is under
+  # test and has not been proven good. Blessing it as the state to fall back to
+  # would turn the safety net into a way to persist a broken configuration.
+  if timer_armed; then
+    die "a deadman is armed; disarm and verify the board first, then snapshot"
+  fi
+
+  local present=() missing=() p
+  for p in "${SNAPSHOT_DIRS[@]}"; do
+    if [ -d "$p" ]; then present+=("$p"); else missing+=("$p"); fi
+  done
+  for p in "${SNAPSHOT_FILES[@]}"; do
+    if [ -f "$p" ]; then present+=("$p"); else missing+=("$p"); fi
+  done
+  [ "${#present[@]}" -gt 0 ] || die "nothing to snapshot"
+
+  local tmp="$STATE_DIR/good.tar.new"
+  # Paths are stored relative to / so a restore cannot depend on the archive
+  # being unpacked from a particular directory.
+  tar --numeric-owner -cf "$tmp" -C / "${present[@]#/}"
+  tar -tf "$tmp" >/dev/null || die "snapshot archive did not read back"
+  sync "$tmp"
+  mv "$tmp" "$SNAPSHOT"
+  sync "$STATE_DIR"
+
+  local resolv="absent"
+  if [ -L /etc/resolv.conf ]; then
+    resolv="symlink -> $(readlink /etc/resolv.conf)"
+  elif [ -f /etc/resolv.conf ]; then
+    resolv="regular file"
+  fi
+
+  {
+    printf '{\n'
+    printf '  "at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "atEpoch": %s,\n' "$(date +%s)"
+    printf '  "host": "%s",\n' "$(json_string "$(hostname)")"
+    printf '  "kernel": "%s",\n' "$(json_string "$(uname -r)")"
+    printf '  "bootId": "%s",\n' "$(json_string "$(cat /proc/sys/kernel/random/boot_id)")"
+    # Seconds since boot at the moment of the snapshot. With bootId above, this makes the snapshot's age
+    # answerable without the wall clock -- within this boot. Across boots it is not answerable at all,
+    # and `status` says so rather than printing a difference of two unrelated wall-clock readings.
+    printf '  "atUptime": %s,\n' "$(awk '{printf "%d", $1}' /proc/uptime)"
+    printf '  "resolvConf": "%s",\n' "$(json_string "$resolv")"
+    printf '  "captured": ['
+    local first=1
+    for p in "${present[@]}"; do
+      [ $first = 1 ] || printf ','
+      first=0
+      printf '\n    "%s"' "$(json_string "$p")"
+    done
+    printf '\n  ],\n'
+    printf '  "absentAtSnapshot": ['
+    first=1
+    for p in "${missing[@]}"; do
+      [ $first = 1 ] || printf ','
+      first=0
+      printf '\n    "%s"' "$(json_string "$p")"
+    done
+    printf '\n  ]\n'
+    printf '}\n'
+  } > "$MANIFEST.new"
+  sync "$MANIFEST.new"
+  mv "$MANIFEST.new" "$MANIFEST"
+  sync "$STATE_DIR"
+
+  say "snapshot written: $SNAPSHOT ($(wc -c < "$SNAPSHOT") bytes)"
+  say "captured: ${present[*]}"
+  [ "${#missing[@]}" -eq 0 ] || say "absent at snapshot: ${missing[*]}"
+}
+
+# --- arm / disarm / status --------------------------------------------------
+
+cmd_arm() {
+  require_root
+  ensure_state_dir
+  [ -f "$SNAPSHOT" ] || die "no snapshot; run 'wayfarer-deadman snapshot' first"
+  tar -tf "$SNAPSHOT" >/dev/null 2>&1 || die "snapshot is unreadable; take a new one"
+
+  local minutes="${1:-$DEFAULT_MINUTES}"
+  case "$minutes" in
+    ''|*[!0-9]*) die "minutes must be a positive integer" ;;
+  esac
+  [ "$minutes" -gt 0 ] || die "minutes must be a positive integer"
+
+  if timer_armed; then
+    die "already armed ($(seconds_left || echo '?')s left); disarm first"
+  fi
+  # A previous run left behind in a failed state would make systemd-run refuse the
+  # fixed unit name. Clearing it here keeps the failure mode "arm works" rather
+  # than "arm refused for a reason nobody reads at 2am".
+  systemctl reset-failed "$UNIT.service" "$UNIT.timer" 2>/dev/null || true
+
+  local self armed_at fire_at
+  self=$(readlink -f "$0")
+  armed_at=$(awk '{printf "%d", $1}' /proc/uptime)
+  fire_at=$(( armed_at + minutes * 60 ))
+
+  # OnBootSec, not --on-active. This is the whole reason the deadman can be trusted.
+  #
+  # Measured on systemd 257.13, 2026-09-21: `--on-active=20min` produces a timer whose
+  # deadline is relative to *unit activation*, and `systemctl daemon-reload` re-bases it
+  # to the moment of the reload. Every Wayfarer apply that writes a unit runs a
+  # daemon-reload, so an --on-active deadman was postponed by its full interval by the
+  # very operation it was armed to protect — and an apply that retries postpones it
+  # again, so it would never fire at all. Observed for real: armed at 02:02:50 for 20
+  # minutes, an apply at 02:18:12, and the timer then due at 02:38:12.
+  #
+  # OnBootSec is anchored to boot, which does not move. Verified by measurement: three
+  # daemon-reloads and nine seconds left NextElapseUSecMonotonic at 4561s exactly.
+  #
+  # It also makes the recorded deadline below *the same quantity systemd acts on*
+  # rather than a second copy of it, which is the only reason `seconds_left` can be
+  # believed.
+  systemd-run \
+    --unit="$UNIT" \
+    --timer-property=OnBootSec="${fire_at}s" \
+    --timer-property=AccuracySec=1s \
+    --description="Wayfarer bench deadman: restore last known-good network configuration and reboot" \
+    "$self" fire >/dev/null
+  {
+    printf '{\n'
+    printf '  "at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "minutes": %s,\n' "$minutes"
+    printf '  "armedAtUptime": %s,\n' "$armed_at"
+    printf '  "fireAtUptime": %s\n' "$fire_at"
+    printf '}\n'
+  } > "$ARMED_RECORD"
+  sync "$ARMED_RECORD" 2>/dev/null || true
+  say "armed: fires in ${minutes} min unless 'wayfarer-deadman disarm' runs first"
+  cmd_status
+}
+
+cmd_disarm() {
+  require_root
+  if timer_armed; then
+    systemctl stop "$UNIT.timer" 2>/dev/null || true
+    systemctl stop "$UNIT.service" 2>/dev/null || true
+    systemctl reset-failed "$UNIT.service" "$UNIT.timer" 2>/dev/null || true
+    rm -f "$ARMED_RECORD"
+    say "disarmed"
+  else
+    systemctl reset-failed "$UNIT.service" "$UNIT.timer" 2>/dev/null || true
+    rm -f "$ARMED_RECORD"
+    say "not armed"
+  fi
+}
+
+cmd_release() {
+  require_root
+  # The counterpart to the mask a fire performs. It exists as a command rather than as a line in a
+  # record somebody retypes, because the person running it is by definition dealing with a board that
+  # has just rescued itself, and `systemctl unmask` followed by the wrong unit name at that moment is
+  # an easy mistake with a confusing result.
+  local released=0 unit
+  if [ "$(systemctl is-enabled "$MANAGED_UNIT" 2>/dev/null || true)" = masked ]; then
+    systemctl unmask "$MANAGED_UNIT"
+    say "unmasked $MANAGED_UNIT"
+    released=1
+  fi
+
+  # Every generated unit a fire masked. Enumerated from what is masked now rather than from the fire
+  # record, so this also cleans up after a fire whose record was lost.
+  while read -r unit _; do
+    [ -n "$unit" ] || continue
+    case "$unit" in
+      "$OWNED_PREFIX"*)
+        if [ "$(systemctl is-enabled "$unit" 2>/dev/null || true)" = masked ]; then
+          systemctl unmask "$unit" && say "unmasked $unit"
+          released=1
+        fi
+        ;;
+    esac
+  done < <(systemctl list-unit-files --no-legend --plain "${OWNED_PREFIX}*" 2>/dev/null | awk '{print $1}')
+
+  [ "$released" = 1 ] || say "nothing was masked; nothing to release"
+
+  # Deliberately nothing is started here. These were masked because they may have been the reason the
+  # board needed rescuing, and starting them again unattended is the one decision that belongs to a person
+  # looking at the evidence.
+  #
+  # But `unmask` is not the inverse of `mask`, and that asymmetry is a trap worth naming. Measured on the
+  # bench board, systemd 257.13:
+  #
+  #   # systemctl mask wayfarer.service     → Created symlink /etc/systemd/system/wayfarer.service → /dev/null
+  #   # systemctl unmask wayfarer.service   → Removed '/etc/systemd/system/wayfarer.service'
+  #                                           Removed '/etc/systemd/system/multi-user.target.wants/wayfarer.service'
+  #
+  # It removes the **enablement** link too, so a released unit is left `disabled` and will not start at the
+  # next boot. Anybody who released a unit and rebooted expecting it back would find it absent, with nothing
+  # having said so — which is the same silent shape as everything else in this file.
+  if [ "$released" = 1 ]; then
+    say ""
+    say "NOTE: unmasking also removed the boot-time enablement, so these units are now DISABLED."
+    say "      When you are ready, and only once you know why the board needed rescuing:"
+    say "        systemctl enable --now $MANAGED_UNIT"
+  fi
+}
+
+cmd_status() {
+  if timer_armed; then
+    local left
+    left=$(seconds_left || echo '?')
+    say "armed: ${left}s left"
+    # A derived check, and the one that caught the --on-active defect. An armed
+    # transient timer whose deadline has passed is a contradiction: it should have
+    # fired and collected itself. Seeing it means the recorded deadline and the one
+    # systemd will act on have drifted apart, and a status line that reported the
+    # record alone said "overdue by 604s" about a timer with four minutes left.
+    # The grace covers AccuracySec and the moment between firing and collection.
+    case "$left" in
+      -*) if [ "$left" -lt -"$DRIFT_GRACE_SECONDS" ]; then
+            say "WARNING: the timer is still armed $(( -left ))s past the recorded deadline."
+            say "         The record and systemd disagree; do not trust either number."
+            say "         systemd says it next fires in: $(systemctl show "$UNIT.timer" -p NextElapseUSecMonotonic --value 2>/dev/null || echo '?') after boot (uptime now $(awk '{printf "%d", $1}' /proc/uptime)s)"
+          fi ;;
+    esac
+  else
+    say "armed: no"
+  fi
+  # Reported next to the deadman's own state, because a masked daemon is the most surprising thing
+  # about a board that has just been rescued and the least likely to be guessed.
+  if [ "$(systemctl is-enabled "$MANAGED_UNIT" 2>/dev/null || true)" = masked ]; then
+    say "$MANAGED_UNIT: MASKED by a deadman fire — run 'wayfarer-deadman release' to undo"
+  fi
+  if [ -f "$SNAPSHOT" ]; then
+    # The age, when it can be answered, and a plain statement when it cannot.
+    #
+    # It used to be the current wall clock minus the snapshot file's mtime. Those are two wall-clock
+    # readings taken either side of a possible power cycle, on a board with no clock battery, so the
+    # difference could be negative or measured in days for a snapshot taken minutes earlier.
+    #
+    # What a reader actually needs to know is not a number of seconds but whether the snapshot predates
+    # the running configuration. "Taken during an earlier boot" answers that, and is true.
+    local snap_boot snap_uptime now_boot age_s
+    snap_boot="$(sed -n 's/.*"bootId": "\([^"]*\)".*/\1/p' "$MANIFEST" 2>/dev/null | head -1)"
+    snap_uptime="$(sed -n 's/.*"atUptime": \([0-9]*\).*/\1/p' "$MANIFEST" 2>/dev/null | head -1)"
+    now_boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf '')"
+    if [ -n "${snap_boot:-}" ] && [ "$snap_boot" = "$now_boot" ] && [ -n "${snap_uptime:-}" ]; then
+      age_s=$(( $(awk '{printf "%d", $1}' /proc/uptime) - snap_uptime ))
+      say "snapshot: $SNAPSHOT, $(wc -c < "$SNAPSHOT") bytes, ${age_s}s old (this boot)"
+    else
+      say "snapshot: $SNAPSHOT, $(wc -c < "$SNAPSHOT") bytes, taken during an EARLIER BOOT"
+      say "          so its age cannot be measured here; check it still matches what you expect"
+    fi
+  else
+    say "snapshot: none"
+  fi
+  if [ -f "$FIRE_RECORD" ]; then
+    say "last fire: $(sed -n 's/.*"at": "\([^"]*\)".*/\1/p' "$FIRE_RECORD" | head -1) — see $FIRE_RECORD"
+  else
+    say "last fire: never"
+  fi
+}
+
+# --- fire ------------------------------------------------------------------
+
+cmd_fire() {
+  require_root
+  ensure_state_dir
+  [ -f "$SNAPSHOT" ] || die "fired with no snapshot; nothing to restore"
+  tar -tf "$SNAPSHOT" >/dev/null 2>&1 || die "fired with an unreadable snapshot"
+
+  local work="$STATE_DIR/restore.tmp"
+  rm -rf "$work"
+  mkdir -p "$work"
+  tar --numeric-owner -xf "$SNAPSHOT" -C "$work"
+
+  local removed=() changed=() p rel out line
+  for p in "${SNAPSHOT_DIRS[@]}"; do
+    rel="${p#/}"
+    [ -d "$work/$rel" ] || continue
+    mkdir -p "$p"
+    # --delete is the whole point: a merge would leave behind a file added after
+    # the snapshot, and a stray netplan or .link file is exactly what locks the
+    # board out. --itemize-changes is how the deletions get recorded.
+    out=$(rsync -a --delete --itemize-changes "$work/$rel/" "$p/")
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      case "$line" in
+        # rsync pads the name after "*deleting" to a fixed column, so the padding
+        # has to come off or every recorded path is wrong by a few spaces.
+        '*deleting '*) removed+=("$p/$(printf '%s' "${line#\*deleting}" | sed 's/^ *//')") ;;
+        # A directory whose only difference is its own timestamp is noise: it
+        # changes whenever anything inside it does, and it says nothing.
+        .d..t*) ;;
+        *) changed+=("$p: $line") ;;
+      esac
+    done <<< "$out"
+  done
+  for p in "${SNAPSHOT_FILES[@]}"; do
+    rel="${p#/}"
+    [ -f "$work/$rel" ] || continue
+    if ! cmp -s "$work/$rel" "$p"; then
+      changed+=("$p: content restored")
+    fi
+    cp -a "$work/$rel" "$p.deadman.new"
+    sync "$p.deadman.new"
+    mv "$p.deadman.new" "$p"
+  done
+
+  sync
+
+  # Take our own software out of the boot path before rebooting.
+  #
+  # Restoring the network and then letting the daemon start again would hand the board straight back
+  # to whatever it was rescued from, if the daemon was the cause. Masking rather than disabling,
+  # because a mask cannot be undone by something else calling `enable` — including our own installer,
+  # which a half-finished deploy may well run again.
+  #
+  # Failure here is reported and does not stop the reboot: a board that reboots with the daemon still
+  # enabled is no worse than one that never reboots at all, and the record below says which happened.
+  local masked="no"
+  if mask_verified "$MANAGED_UNIT"; then
+    masked="yes"
+  else
+    # Named precisely, because the likeliest cause is a unit file left in the directory a mask needs and
+    # that is a one-line thing to check.
+    masked="FAILED — $MANAGED_UNIT is still enabled and will start at boot; check for a unit file at /etc/systemd/system/$MANAGED_UNIT"
+  fi
+  say "masked $MANAGED_UNIT: $masked"
+
+  # And every generated unit. The daemon is the control plane; these are what hold the radio, the
+  # addresses and the ruleset, and they start at boot on their own.
+  #
+  # Both listings are consulted because they answer different questions: `list-units` finds what is
+  # loaded now, `list-unit-files` finds what is enabled for the next boot — and it is the second set
+  # that turns a rescue into a loop. A template file itself (`wf-hostapd@.service`) is skipped: it is
+  # not a unit that runs, and masking it would block the instances a later release needs.
+  local owned=() unit
+  while read -r unit _; do
+    [ -n "$unit" ] || continue
+    case "$unit" in
+      "$OWNED_PREFIX"*@.service) continue ;;
+      "$OWNED_PREFIX"*) owned+=("$unit") ;;
+    esac
+  done < <(
+    {
+      systemctl list-units --all --no-legend --plain "${OWNED_PREFIX}*" 2>/dev/null | awk '{print $1}'
+      systemctl list-unit-files --no-legend --plain "${OWNED_PREFIX}*" 2>/dev/null | awk '{print $1}'
+    } | sort -u
+  )
+
+  local masked_owned=() unmasked_owned=()
+  for unit in ${owned+"${owned[@]}"}; do
+    if mask_verified "$unit"; then
+      masked_owned+=("$unit")
+    else
+      unmasked_owned+=("$unit")
+    fi
+  done
+  if [ "${#masked_owned[@]}" -gt 0 ]; then
+    say "masked generated units: ${masked_owned[*]}"
+  else
+    say "no generated units were masked"
+  fi
+  if [ "${#unmasked_owned[@]}" -gt 0 ]; then
+    # Loud, and in the record: these will start at the next boot and may retake the hardware this fire is
+    # trying to release, which is how a rescue turns into a loop.
+    say "COULD NOT MASK: ${unmasked_owned[*]}"
+    say "  these will start at boot and may retake the hardware; check /etc/systemd/system for their files"
+  fi
+  sync
+
+  # The record goes on the card, not into the journal: the journal on this board
+  # is RAM-backed, so the one entry guaranteed to be lost across the reboot this
+  # function is about to perform is the entry describing why it happened.
+  {
+    printf '{\n'
+    printf '  "at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "bootId": "%s",\n' "$(json_string "$(cat /proc/sys/kernel/random/boot_id)")"
+    printf '  "uptimeSeconds": %s,\n' "$(awk '{printf "%d", $1}' /proc/uptime)"
+    printf '  "snapshotTakenAt": "%s",\n' "$(json_string "$(sed -n 's/.*"at": "\([^"]*\)".*/\1/p' "$MANIFEST" 2>/dev/null | head -1)")"
+    printf '  "maskedUnit": "%s",\n' "$(json_string "$MANAGED_UNIT")"
+    printf '  "masked": "%s",\n' "$(json_string "$masked")"
+    printf '  "maskedGeneratedUnits": "%s",\n' "$(json_string "${masked_owned[*]-}")"
+    printf '  "couldNotMask": "%s",\n' "$(json_string "${unmasked_owned[*]-}")"
+    printf '  "undoWith": "wayfarer-deadman release",\n'
+    printf '  "removed": ['
+    local first=1 item
+    for item in ${removed+"${removed[@]}"}; do
+      [ $first = 1 ] || printf ','
+      first=0
+      printf '\n    "%s"' "$(json_string "$item")"
+    done
+    printf '\n  ],\n'
+    printf '  "changed": ['
+    first=1
+    for item in ${changed+"${changed[@]}"}; do
+      [ $first = 1 ] || printf ','
+      first=0
+      printf '\n    "%s"' "$(json_string "$item")"
+    done
+    printf '\n  ]\n'
+    printf '}\n'
+  } > "$FIRE_RECORD.new"
+  sync "$FIRE_RECORD.new"
+  mv "$FIRE_RECORD.new" "$FIRE_RECORD"
+  rm -f "$ARMED_RECORD"
+  sync "$STATE_DIR"
+  rm -rf "$work"
+
+  # Backstop first, reboot second. A normal reboot can hang indefinitely on a unit
+  # that is already wedged, and the deadman exists for boards that are wedged.
+  # DefaultDependencies=no keeps this transient unit out of the shutdown ordering
+  # so systemd does not stop it while it is the thing watching the shutdown, and
+  # KillMode=none keeps it alive when its sibling units are being torn down.
+  systemd-run \
+    --unit="$BACKSTOP_UNIT" \
+    --description="Wayfarer bench deadman backstop: force a reset if the reboot hangs" \
+    --property=DefaultDependencies=no \
+    --property=KillMode=none \
+    --corp \
+    --no-block \
+    /bin/sh -c "sleep $BACKSTOP_SECONDS; sync; echo b > /proc/sysrq-trigger" >/dev/null 2>&1 || true
+
+  sync
+  # A clean reboot so the filesystem is unmounted: the moment the deadman fires is
+  # the worst possible moment to abandon a card mid-write.
+  if ! systemctl reboot; then
+    sync
+    echo b > /proc/sysrq-trigger
+  fi
+}
+
+# --- entry point -----------------------------------------------------------
+
+main() {
+  local cmd="${1:-status}"
+  shift || true
+  case "$cmd" in
+    snapshot|arm|disarm|release|fire)
+      ensure_state_dir
+      # One at a time: two concurrent arms or a snapshot racing a fire would each
+      # leave a state nobody can reason about afterwards.
+      exec 9>"$LOCK"
+      flock -w 30 9 || die "another wayfarer-deadman run holds the lock"
+      "cmd_$cmd" "$@"
+      ;;
+    status) cmd_status "$@" ;;
+    -h|--help|help)
+      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+      ;;
+    *) die "unknown command: $cmd (try --help)" ;;
+  esac
+}
+
+main "$@"
