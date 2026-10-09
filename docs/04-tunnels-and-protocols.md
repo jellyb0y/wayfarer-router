@@ -780,6 +780,38 @@ HH:MM"*, working the time out on the viewer's clock from that and the reading's 
 no RTC. The field is declared in `ObserversResponse` (a field the schema does not declare is dropped) and
 copied by name in `core/observers.ts` (which drops what it does not name).
 
+## A path broken behind a live peer is restarted by nobody (2026-10-09)
+
+**The symptom.** On the bench board, 2026-10-09 09:38–09:42, the core logged
+`dial tcp 10.127.0.32:443: i/o timeout` through `office` (OpenVPN, four `remote` lines, `remote-random`)
+five times. Measured at 09:44 with the same session up since 08:16: an HTTPS request to `10.127.0.32`
+bound to `wfvpnoff` (bypassing the core) failed after 8 s, while the pushed gateway `10.32.128.1` and the
+pushed resolver `192.168.244.5` answered pings over `wfvpnoff` in 40–47 ms and the resolver accepted TCP
+on 53. The watchdog read the tunnel `alive` by peer keepalive throughout.
+
+**Why nothing restarted it.** Each mechanism that could was answering a different question, and each
+answered it correctly:
+
+* OpenVPN's `ping-restart 120` fires on silence from the peer. The peer was not silent.
+* systemd's `Restart=always` fires when the process exits. It did not.
+* The watchdog measures the tunnel's own liveness (*The guard asks the tunnel, and blocks nothing*,
+  above) and never restarts a unit in any case. Measuring a resource behind the tunnel was removed on
+  2026-09-24 because one closed port on one server read as a dead tunnel; this is the same situation
+  seen from the other side — one dead path behind a live tunnel reads as nothing.
+
+**What fixed it.** `systemctl restart wf-openvpn@office` at 09:43: the client reconnected to another of
+its servers (`213.226.70.3`; pushed subnet `10.32.192.0/20`, resolver `192.168.242.5`, where it had been
+`172.255.195.138`, `10.32.128.0/20`, `192.168.244.5`). The first request straight after the restart
+still failed; a minute later three requests bound to `wfvpnoff` and three through the core all
+answered `200` in 0.15–0.17 s. Whether the old server's path to `10.127.0.32` was broken, or that host
+is reachable only from some of the servers, was not established.
+
+**The decision.** A manual reconnect, on the API and as a button on each running tunnel
+(`POST /api/tunnels/:id/restart`, [07-api](07-api.md)). An automatic reconnect on a failing resource was
+not built: it needs exactly the per-resource probe that was removed for its false readings, and a
+reconnect on a misfire drops every connection through the tunnel. That remains an open question for the
+owner rather than a default.
+
 ## Public resolvers are reached over TCP (2026-10-07)
 
 **Symptom.** Through the device, a speed test was fast and pages were slow, most of all a site not opened

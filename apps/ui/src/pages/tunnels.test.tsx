@@ -42,12 +42,17 @@ async function renderScreen(
   element: React.ReactElement,
   document: Record<string, unknown>,
   observers?: unknown,
+  restartAnswer?: unknown,
 ): Promise<void> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const answer = (body: unknown): Response =>
     new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (url.includes('/restart')) {
+      restartCalls.push(`${init?.method ?? 'GET'} ${url}`);
+      return answer(restartAnswer ?? {});
+    }
     if (/\/api\/profiles\/[^/]+$/.test(url)) return answer({ document, missingSecrets: [] });
     if (url.includes('/api/profiles')) return answer({ activeProfileId: 'p1', profiles: [] });
     if (url.includes('/api/system')) return answer({ deviceName: 'bench', version: '0', runtime: 'x', listen: { port: 8088, addresses: [] } });
@@ -63,6 +68,8 @@ async function renderScreen(
   );
   await waitFor(() => expect(useDraft.getState().draft).not.toBeNull());
 }
+
+const restartCalls: string[] = [];
 
 const openvpn = (over: Tunnel = {}): Tunnel => ({
   id: 't1',
@@ -531,5 +538,50 @@ describe('one proxy screen, three things it can speak', () => {
     await renderScreen(<Tunnels />, documentWith([]));
     // The add button exists, so a proxy can be created from the interface and not only from the API.
     expect(await screen.findByText(/Proxy/)).toBeTruthy();
+  });
+});
+
+describe('reconnecting a tunnel by hand', () => {
+  /*
+   * 2026-10-09: `office` kept its keepalive and its gateway while one host behind it stopped
+   * answering, so nothing on the device restarted it. The button is the way back without a shell.
+   */
+  const watchdogReading = (subject: string) => ({
+    problems: 0,
+    observers: [
+      {
+        name: 'tunnel-watchdog',
+        watches: 'tunnels',
+        everySeconds: 30,
+        state: 'ok',
+        problem: null,
+        lastActed: null,
+        lastLooked: {
+          at: '2026-10-09T00:00:00.000Z',
+          ageSeconds: 4,
+          what: 'guards',
+          items: [{ subject, state: 'alive', note: 'ok', method: 'peer keepalive', action: 'nothing', tone: 'ok' }],
+        },
+      },
+    ],
+  });
+
+  it('is offered beside a running tunnel, restarts that one, and says what the device said when it did not come back', async () => {
+    restartCalls.length = 0;
+    await renderScreen(<Tunnels />, documentWith([openvpn({ id: 'office' })]), watchdogReading('office'), {
+      tunnel: 'office',
+      restarted: false,
+      units: [],
+      message: 'Tunnel "office" did not come back running: wf-openvpn@office.service: done, not active.',
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    expect(await screen.findByText(/did not come back running/)).toBeTruthy();
+    expect(restartCalls).toEqual(['POST /api/tunnels/office/restart']);
+  });
+
+  it('is not offered beside a tunnel the device is not running', async () => {
+    await renderScreen(<Tunnels />, documentWith([openvpn({ id: 'drafted' })]), watchdogReading('office'));
+    expect(await screen.findByText('Amsterdam egress')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
   });
 });

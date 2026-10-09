@@ -48,6 +48,7 @@ import {
   type RuleSetAgeSchema,
   SystemResponse,
   TokenSummary,
+  TunnelRestartResponse,
 } from '@wayfarer/schemas';
 import type { Platform } from '../platform/index.ts';
 import type { Store, TokenScope } from '../state/store.ts';
@@ -856,6 +857,132 @@ function registerPowerOff(app: FastifyInstance, context: ServerContext): void {
 }
 
 /**
+ * `POST /api/tunnels/:id/restart`: restart the units one running tunnel is made of, on request.
+ *
+ * ## The symptom it exists for
+ *
+ * Measured on the bench board, 2026-10-09 09:38–09:44: `office` (OpenVPN, four `remote` lines,
+ * `remote-random`) could not reach `10.127.0.32:443` — from the core and bound to `wfvpnoff` alike —
+ * while its peer's keepalive arrived, its pushed gateway answered pings and its pushed resolver answered
+ * over TCP. Nothing on the device restarted it, and nothing was wrong by any measure it takes: OpenVPN's
+ * `ping-restart` fires on silence from the peer, systemd's `Restart=always` on the process exiting, and
+ * the watchdog reads the tunnel's own liveness and never restarts anything. A restart by hand landed on
+ * another server (`213.226.70.3`, a different pushed subnet and resolver), and the same host answered
+ * `200` six times running. A path broken **behind** a live peer is invisible to every automatic
+ * mechanism here, so the owner asked for a button.
+ *
+ * ## The guards, and why each
+ *
+ * * **`apply`**, not `admin`: a restart changes nothing that persists, and the tunnel comes back by itself
+ *   or not at all — the same as a reconnection its peer can cause at any moment.
+ * * **Only a tunnel the last applied plan runs**, read from `store.device().tunnelUnits`. Unit names are
+ *   never built from the request: the id is looked up, and only the names the plan recorded are touched.
+ * * **A tunnel with no units of its own is refused**, not served by restarting the core: a tunnel carried
+ *   inside the core has no process of its own, and restarting the core bounces every tunnel at once.
+ * * **Not while an apply is running.** The reconciler restarts these same units, and two restarts racing
+ *   leave a state neither of them chose.
+ * * **One restart of a tunnel at a time**, for the double tap.
+ *
+ * Answered after the jobs finish, with each unit read back: a job systemd calls `done` on a unit that
+ * exited at once is not a restart. Whether the tunnel then connected is the watchdog's next reading.
+ */
+function registerTunnelRestart(app: FastifyInstance, context: ServerContext): void {
+  const typed = app.withTypeProvider<TypeBoxTypeProvider>();
+  const underWay = new Set<string>();
+
+  typed.post(
+    '/api/tunnels/:id/restart',
+    {
+      preHandler: requireScope('apply'),
+      schema: {
+        summary: 'Restart one running tunnel: its client process reconnects. Nothing in the configuration changes.',
+        description:
+          'Restarts, in order, the units the last applied plan recorded for this tunnel, waits for each job, and ' +
+          'reads each unit back. Refused for a tunnel the running plan does not have (404), for one with no units ' +
+          'of its own (409), while an apply is running (409), and while a restart of the same tunnel is under way ' +
+          '(409). Whether the tunnel connected afterwards is the watchdog\'s next reading in `GET /api/observers`.',
+        params: Type.Object({ id: Type.String() }),
+        response: { 200: TunnelRestartResponse, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse },
+      },
+    },
+    async (request, reply) => {
+      const id = request.params.id;
+      const entry = (context.store.device().tunnelUnits ?? []).find((tunnel) => tunnel.id === id);
+      if (entry === undefined) {
+        return reply.status(404).send({
+          error: {
+            code: 'tunnel_not_running',
+            message: `No tunnel "${id}" is in the configuration this device is running. Nothing was done.`,
+            hint: 'a tunnel exists here once the profile that names it has been applied',
+          },
+        });
+      }
+      if (entry.units.length === 0) {
+        return reply.status(409).send({
+          error: {
+            code: 'tunnel_has_no_units',
+            message:
+              `Tunnel "${id}" runs no process of its own: it is carried inside the proxy core, and restarting the ` +
+              'core would interrupt every tunnel at once. Nothing was done.',
+          },
+        });
+      }
+      const applying = context.profileRoutes?.profiles.recentTransactions(5).find((row) => row.state === 'applying');
+      if (applying !== undefined) {
+        return reply.status(409).send({
+          error: {
+            code: 'apply_in_progress',
+            message: `Transaction ${applying.id} is being applied and restarts these units itself. Nothing was done.`,
+            hint: 'try again once the apply has finished',
+            detail: { transaction: applying.id },
+          },
+        });
+      }
+      if (underWay.has(id)) {
+        return reply.status(409).send({
+          error: { code: 'restart_under_way', message: `Tunnel "${id}" is already being restarted. Nothing more was done.` },
+        });
+      }
+
+      underWay.add(id);
+      const who = requestedBy(request, context);
+      try {
+        const units: { unit: string; result: string; active: boolean | null }[] = [];
+        for (const unit of entry.units) {
+          const job = await context.platform.systemd
+            .restart(unit)
+            .catch((error: unknown) => ({ result: `error: ${String(error)}` }));
+          const state = await context.platform.systemd.state(unit).catch(() => null);
+          units.push({ unit, result: job.result, active: state === null ? null : state.isActive });
+        }
+        const restarted = units.every((unit) => unit.result === 'done' && unit.active === true);
+        const described = units
+          .map((unit) => `${unit.unit}: ${unit.result}, ${unit.active === null ? 'state unread' : unit.active ? 'active' : 'not active'}`)
+          .join('; ');
+        context.store.recordEvent({
+          level: restarted ? 'info' : 'warn',
+          kind: restarted ? 'tunnel.restarted' : 'tunnel.restart-failed',
+          summary: restarted
+            ? `tunnel "${id}" restarted on request by ${who.label}: ${described}`
+            : `tunnel "${id}" was asked to restart by ${who.label} and did not come back running: ${described}`,
+          detail: { tunnel: id, requestedBy: who.record, units },
+        });
+        return reply.status(200).send({
+          tunnel: id,
+          restarted,
+          units,
+          message: restarted
+            ? `Tunnel "${id}" was restarted. Whether it has connected shows in its health within about a minute.`
+            : `Tunnel "${id}" did not come back running: ${described}.`,
+        });
+      } finally {
+        underWay.delete(id);
+      }
+    },
+  );
+}
+
+/**
  * Who asked, in words for the event summary and as a record for its detail.
  *
  * **Never the session id**: it is the credential itself, the event ring is readable with the `read`
@@ -974,6 +1101,7 @@ function registerRoutes(app: FastifyInstance, context: ServerContext, accessInde
   );
 
   registerPowerOff(typed, context);
+  registerTunnelRestart(typed, context);
 
   typed.get(
     '/api/capabilities',

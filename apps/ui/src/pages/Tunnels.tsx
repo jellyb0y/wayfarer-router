@@ -42,9 +42,10 @@
  * duplicate-control defect one floor up.
  */
 import type { ReactElement } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { TUNNEL_PROTOCOLS, TUNNEL_PROTOCOL_TITLES, type TunnelProtocol } from '@wayfarer/schemas';
-import { api, profileApi } from '../lib/api.ts';
+import { ApiFailure, api, profileApi } from '../lib/api.ts';
 import { readAt, useDraft } from '../lib/draft.ts';
 import { useProfileEditing } from '../lib/editing.ts';
 import { t, tf } from '../lib/i18n.ts';
@@ -80,7 +81,7 @@ export function Tunnels(): ReactElement {
 
   return (
     <Screen title={t('nav.tunnels')}>
-      <TunnelListCard document={document} />
+      <TunnelListCard document={document} running={target.isActive} />
 
       {/*
         * Where the tunnels above come from, directly under them. Not the same act as the VLESS
@@ -128,7 +129,12 @@ export function Tunnels(): ReactElement {
   );
 }
 
-function TunnelListCard({ document }: { document: Record<string, unknown> }): ReactElement {
+/**
+ * `running` is whether the profile on this screen is the one the device runs. Reconnecting is offered
+ * only then: a tunnel in a profile being prepared may share an id with a running one, and the button
+ * would restart a tunnel other than the one it is drawn beside.
+ */
+function TunnelListCard({ document, running }: { document: Record<string, unknown>; running: boolean }): ReactElement {
   const draft = useDraft();
   const tunnels = (readAt(document, '/tunnels') as Tunnel[] | undefined) ?? [];
   /*
@@ -227,6 +233,13 @@ function TunnelListCard({ document }: { document: Record<string, unknown> }): Re
             )}
 
             <div className="row-actions">
+              {/*
+                * Only beside a tunnel the watchdog has a reading for, which is a tunnel the running
+                * configuration has. One a person has just added in the draft has nothing to restart yet.
+                */}
+              {running && typeof tunnel['id'] === 'string' && readings.has(tunnel['id']) ? (
+                <TunnelRestart id={tunnel['id']} />
+              ) : null}
               <button
                 type="button"
                 onClick={() => draft.set('/tunnels', tunnels.filter((_unused, other) => other !== index))}
@@ -270,6 +283,56 @@ function TunnelListCard({ document }: { document: Record<string, unknown> }): Re
         </div>
       </Fold>
     </Card>
+  );
+}
+
+/**
+ * Reconnecting one tunnel by hand.
+ *
+ * It exists because a path can break **behind** a live peer: measured on the bench board on
+ * 2026-10-09, `office` kept its keepalive and its gateway while one office host stopped answering
+ * through it, so neither OpenVPN, systemd nor the watchdog had any reason to restart it. A reconnect
+ * landed on another of its servers and the host answered again.
+ *
+ * One tap, unlike switching off: nothing is lost that the tunnel does not get back by itself within
+ * seconds. The answer is read for `restarted`, not for the status — the device answers 200 for a
+ * restart whose unit did not come back — and the watchdog reading is asked for again, because that
+ * is where "did it connect" is answered.
+ */
+function TunnelRestart({ id }: { id: string }): ReactElement {
+  const queries = useQueryClient();
+  const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null);
+  const restart = useMutation({
+    mutationFn: () => api.restartTunnel(id),
+    retry: false,
+    onSuccess: (answer) => {
+      setOutcome(answer.restarted ? { ok: true, text: t('tunnels.restartDone') } : { ok: false, text: answer.message });
+      void queries.invalidateQueries({ queryKey: ['observers'] });
+    },
+    onError: (error: unknown) => {
+      const text = error instanceof ApiFailure ? error.error.message : error instanceof Error ? error.message : String(error);
+      setOutcome({ ok: false, text });
+    },
+  });
+  return (
+    <>
+      <button
+        type="button"
+        title={t('tunnels.restartIs')}
+        disabled={restart.isPending}
+        onClick={() => {
+          setOutcome(null);
+          restart.mutate();
+        }}
+      >
+        {restart.isPending ? t('tunnels.restarting') : t('tunnels.restart')}
+      </button>
+      {outcome === null ? null : (
+        <p className={outcome.ok ? 'note' : 'note bad'} role="status">
+          {outcome.text}
+        </p>
+      )}
+    </>
   );
 }
 

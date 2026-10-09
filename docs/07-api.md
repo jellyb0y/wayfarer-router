@@ -119,6 +119,7 @@ own API**, which went with the generic path in E4.
 GET    /api/health                    liveness; no credential at all
 GET    /api/system                    versions, uptime, clock, core detection, management channels
 POST   /api/system/poweroff           switch the device off; body exactly {"confirm":"poweroff"}
+POST   /api/tunnels/:id/restart       restart one running tunnel's own units; no body
 GET    /api/inventory                 discovered hardware, capabilities, binding candidates
 GET    /api/status                    assembled live state
 
@@ -206,6 +207,36 @@ the same privilege path as the `systemctl reboot` fallback in `host.reboot`.)
 `op-post-api-system-poweroff`, with no credential. Or `POST /api/system/poweroff` with an `admin`
 credential and **no body**: the handler's first statement is the body check, and nothing before it
 reads or writes anything, so the answer is `400 confirmation_required` and the device stays on.
+
+### Reconnecting one tunnel: `POST /api/tunnels/:id/restart` (2026-10-09)
+
+Asked for by the owner as a button, after a tunnel stayed broken behind a live peer and nothing on the
+device restarted it (the measurement is in
+[04-tunnels-and-protocols](04-tunnels-and-protocols.md#a-path-broken-behind-a-live-peer-is-restarted-by-nobody-2026-10-09)).
+
+| order | guard | refusal |
+|---|---|---|
+| 1 | `apply` scope | 403 `insufficient_scope` |
+| 2 | the id is in the running plan's `tunnelUnits` | 404 `tunnel_not_running` |
+| 3 | the tunnel has units of its own | 409 `tunnel_has_no_units` |
+| 4 | no transaction is `applying` | 409 `apply_in_progress` |
+| 5 | no restart of the same tunnel is under way | 409 `restart_under_way` |
+
+Then each unit the plan recorded for the tunnel is restarted in the recorded order, each job awaited,
+each unit's state read back, and a `tunnel.restarted` or `tunnel.restart-failed` row written naming who
+asked. The answer is `200` either way, with `restarted` true only when every job ended `done` **and**
+every unit read back active.
+
+* **Unit names come from the plan, never from the request.** The id is only a key into what the last
+  apply recorded; an id it does not hold restarts nothing.
+* **`apply`, not `admin`.** Nothing persistent changes, and the tunnel reconnects by itself or not at
+  all — the same as a reconnection its peer can force at any moment. Switching off is `admin` because
+  nothing brings the device back; here everything does.
+* **A tunnel inside the core is refused.** It has no process of its own, and restarting the core would
+  interrupt every tunnel to reconnect one.
+* **Not during an apply**, which restarts the same units; two restarts racing leave a state neither chose.
+* **"Restarted" is not "connected".** That is the watchdog's next reading in `GET /api/observers`, which
+  the panel asks for again after the answer.
 
 ### The countdown a client should watch is `secondsRemaining`, not `deadlineAt`
 

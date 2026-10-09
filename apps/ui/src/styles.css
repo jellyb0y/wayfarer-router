@@ -299,6 +299,8 @@ ul.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 /* Actions are always drawn. Nothing appears on hover: a phone has no hover, and a control that only
    exists under a pointer is a control most readers will never find. */
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* An action's outcome under its buttons, not squeezed between them at 360 px. */
+.row-actions > .note { flex-basis: 100%; margin: 0; }
 
 /* ── long values ─────────────────────────────────────────────────────────────────────────── */
 

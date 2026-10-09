@@ -805,6 +805,34 @@ export const PowerOffResponse = Type.Object(
 );
 export type PowerOffResponse = Static<typeof PowerOffResponse>;
 
+/**
+ * The answer to `POST /api/tunnels/:id/restart`: what systemd said about each unit of the tunnel, and
+ * whether each was running when it was read back afterwards.
+ *
+ * `restarted` is the read-back, not the job result. A job that finished `done` on a unit that then
+ * exited at once is not a restarted tunnel. Whether the tunnel then **connected** is not in this
+ * answer at all: that is the watchdog's next reading, and an answer that claimed it would be a report
+ * of an action standing in for the action.
+ */
+export const TunnelRestartResponse = Type.Object(
+  {
+    tunnel: Type.String(),
+    restarted: Type.Boolean(),
+    units: Type.Array(
+      Type.Object({
+        unit: Type.String(),
+        /** systemd's own word for the job: `done`, `failed`, `timeout`, … */
+        result: Type.String(),
+        /** Read after the job finished; `null` when the state could not be read. */
+        active: Type.Union([Type.Boolean(), Type.Null()]),
+      }),
+    ),
+    message: Type.String(),
+  },
+  { $id: 'TunnelRestartResponse' },
+);
+export type TunnelRestartResponse = Static<typeof TunnelRestartResponse>;
+
 export const ALL_SCHEMAS = [
   ErrorBody,
   ErrorResponse,
@@ -827,6 +855,7 @@ export const ALL_SCHEMAS = [
   DebugLevelResponse,
   PowerOffRequest,
   PowerOffResponse,
+  TunnelRestartResponse,
 ];
 
 /* ── the profile document and its secrets ────────────────────────────────────────────────── */

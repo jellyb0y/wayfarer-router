@@ -76,6 +76,16 @@ export const api = {
    */
   observers: () => request<ObserversResponse>('/api/observers'),
   /**
+   * Restarts the tunnel's own units; the configuration is untouched. A 200 can still carry
+   * `restarted: false` — a unit that did not come back running — so the caller reads the flag, not
+   * the status.
+   */
+  restartTunnel: (id: string) =>
+    request<{ tunnel: string; restarted: boolean; message: string }>(
+      `/api/tunnels/${encodeURIComponent(id)}/restart`,
+      { method: 'POST' },
+    ),
+  /**
    * When each rule set in use was last refreshed on this device.
    *
    * Asked for by the Routing screen, where the sets are named. The answer is read from the files at
