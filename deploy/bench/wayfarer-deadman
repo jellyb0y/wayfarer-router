@@ -563,7 +563,7 @@ cmd_fire() {
     --description="Wayfarer bench deadman backstop: force a reset if the reboot hangs" \
     --property=DefaultDependencies=no \
     --property=KillMode=none \
-    --corp \
+    --collect \
     --no-block \
     /bin/sh -c "sleep $BACKSTOP_SECONDS; sync; echo b > /proc/sysrq-trigger" >/dev/null 2>&1 || true
 

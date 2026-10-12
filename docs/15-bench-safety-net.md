@@ -121,7 +121,7 @@ deadman exists for. So a transient unit is started first:
 
 ```
 systemd-run --unit=wayfarer-deadman-backstop \
-  --property=DefaultDependencies=no --property=KillMode=none --corp --no-block \
+  --property=DefaultDependencies=no --property=KillMode=none --collect --no-block \
   /bin/sh -c "sleep 60; sync; echo b > /proc/sysrq-trigger"
 ```
 
@@ -452,7 +452,7 @@ Kept here so that a difference found later is read as a recorded decision rather
 |---|---|---|
 | management path | Ethernet `end0`, `192.168.77.7/24` | The lifeline. Never reconfigured, never taken over, and a plan that reports it under `affectsManagementInterfaces` is refused rather than applied. |
 | access point channel | **36** (5 GHz) | It is the radio channel that gets changed whenever a genuine `network`-class apply is needed for a proof, because it is the smallest such change that cannot touch `end0`. It went 36 → 40 proving the revert timer's deadline survives `daemon-reload`, and 40 → 36 proving the countdown is anchored to that deadline, so it is back where it started. If it is ever found on another valid channel for the band, that is a proof in progress rather than drift. |
-| profile tunnels | none | The two tunnels used to prove the health watchdog (`deadfirst`, `worksecond`) were removed once it was proved. They ran against a transient `systemd-run --corp` SOCKS proxy, so nothing was left behind in `/etc/systemd/system`. |
+| profile tunnels | none | The two tunnels used to prove the health watchdog (`deadfirst`, `worksecond`) were removed once it was proved. They ran against a transient `systemd-run --collect` SOCKS proxy, so nothing was left behind in `/etc/systemd/system`. |
 | soak sampling | running, window reset 2026-09-21 | A window containing our own deploys measures our own deploys — see above. |
 
 An earlier attempt at the same proof set the channel to 1, which the **plan** refused (422): channel 1

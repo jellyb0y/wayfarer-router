@@ -565,7 +565,7 @@ export function createSystemdController(options: SystemdOptions = {}): SystemdCo
           `--description=${transient.description}`,
           // Collected once it has run, so a fired revert does not leave a unit behind that makes the
           // next arm of the same name fail.
-          '--corp',
+          '--collect',
           ...transient.argv,
         ],
         { timeoutMs: 20_000 },
