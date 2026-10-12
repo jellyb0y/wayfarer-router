@@ -383,6 +383,36 @@ export function plan(input: PlannerInput): Plan {
    * The drop-in is the persistence; the live `sysctl` write above is what makes it take effect now.
    * Both, because either alone is a device that is right only before or only after a reboot.
    */
+  /*
+   * **networkd must leave policy rules it did not create alone.** Measured on the bench board,
+   * 2026-10-12, systemd 257.13, with `ManageForeignRoutingPolicyRules` at its default `yes`: networkd
+   * removed every policy rule on this device — the device's own bypass (8000–8002, `wf-firewall`) and
+   * the core's capture (9000–9010) — on its own start and on `networkctl reconfigure end0`, and nothing
+   * put them back. The start is every boot, because the firewall unit runs before the network on
+   * purpose. Without the bypass the tunnel clients' own connections loop into the tunnel and every
+   * tunnel goes down; without the capture, clients leave past the tunnels (see the leak guard in
+   * `generate/firewall.ts`, which is what holds if this file is ever missing).
+   *
+   * Always written, whatever the profile: the rules exist in every profile. Ordering the firewall
+   * after networkd lost because it gives up "rules before the network" and still loses every rule on a
+   * `reconfigure`, which the reconciler itself runs.
+   */
+  desired.files.push({
+    path: PATHS.networkdDropIn,
+    mode: 0o644,
+    purpose: 'stops networkd removing the policy rules this device and its core install',
+    // Read by systemd-networkd at its start only, which is why a change to it restarts networkd.
+    consumedBy: { kind: 'external', by: 'systemd-networkd' },
+    content:
+      generatedHeader('#', profile.meta.name) +
+      '#\n' +
+      '# Without this, networkd removes every policy rule it did not create, on its start and on a link\n' +
+      '# reconfiguration, and the device loses the rules that keep its traffic on the right path.\n' +
+      '\n' +
+      '[Network]\n' +
+      'ManageForeignRoutingPolicyRules=no\n',
+  });
+
   if (desired.sysctl.length > 0) {
     desired.files.push({
       path: PATHS.sysctlDropIn,
@@ -651,6 +681,7 @@ export function plan(input: PlannerInput): Plan {
     wanInterfaces: [...uplinkInterfaces.values()],
     managementPort: input.managementPort,
     timePorts: input.timePorts,
+    clientsGoThroughCore: input.coreBinaryPath !== null && profile.tunnels.some((tunnel) => tunnel.enabled),
   });
   desired.files.push({
     path: PATHS.firewall,
@@ -763,6 +794,7 @@ export function plan(input: PlannerInput): Plan {
    * profile that needs one then says so through the requirement check below rather than through a file
    * nobody reads.
    */
+  desired.policyRules = { timePorts: input.timePorts, core: input.coreBinaryPath !== null };
   if (input.coreBinaryPath !== null) {
     desired.units.push(coreUnit({ binaryPath: input.coreBinaryPath }));
     desired.checks.push({ kind: 'core-check', configPath: PATHS.coreConfig });

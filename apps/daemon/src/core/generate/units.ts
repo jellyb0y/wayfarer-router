@@ -21,7 +21,7 @@
  */
 
 import { PATHS, type DesiredUnit } from '../desired-state.ts';
-import { DEVICE_MARK, DEVICE_MARK_RULE_PRIORITY } from '@wayfarer/schemas';
+import { deviceBypassRules } from '../policy-rules.ts';
 
 /** The device unit for an interface, as systemd names it. */
 export function deviceUnitFor(interfaceName: string): string {
@@ -575,8 +575,8 @@ export function firewallUnit(
    * One policy rule, made idempotent. `ip rule add` is not: restarting this unit without the delete
    * loop stacks another copy every time, for ever.
    */
-  const policyRule = (priority: number, selector: string): string =>
-    `ExecStartPost=/bin/sh -c 'while ${ipPath} rule del priority ${priority} 2>/dev/null; do :; done; ` +
+  const policyRule = (priority: number, selector: string, directive = 'ExecStartPost'): string =>
+    `${directive}=/bin/sh -c 'while ${ipPath} rule del priority ${priority} 2>/dev/null; do :; done; ` +
     `${ipPath} rule add priority ${priority} ${selector} lookup main'`;
 
   /**
@@ -598,13 +598,17 @@ export function firewallUnit(
    * traffic and belongs in the tunnel like the rest of its traffic. Only *this device's* clock correction
    * needs to bypass.
    */
-  const rules = [
-    policyRule(DEVICE_MARK_RULE_PRIORITY, 'uidrange 0-0 iif lo'),
-    ...timePorts.flatMap((port, index) => [
-      policyRule(DEVICE_MARK_RULE_PRIORITY + 1 + index * 2, `ipproto udp dport ${port} iif lo`),
-      policyRule(DEVICE_MARK_RULE_PRIORITY + 2 + index * 2, `ipproto tcp dport ${port} iif lo`),
-    ]),
-  ];
+  // The list is shared with the check that they still exist (`core/policy-rules.ts`). They are kept
+  // alive by the networkd drop-in the planner writes: without it networkd removes them on every start.
+  const rules = deviceBypassRules(timePorts).map((rule) => policyRule(rule.priority, rule.selector));
+  /*
+   * The same rules again as `ExecReload`, and nothing else: no `nft -f`. This is how a missing rule is put
+   * back (`reassertPolicyRules`) without a restart, and the difference is the access point. Measured on the
+   * bench board, 2026-10-12: restarting this unit to restore rule 8000 stopped and started `wf-core`,
+   * `wf-hostapd@` and `wf-dhcp@` as well — they `Require` the ready target, which follows this unit — so
+   * every client was dropped from the radio to restore one routing rule. A reload propagates to nothing.
+   */
+  const reloadRules = deviceBypassRules(timePorts).map((rule) => policyRule(rule.priority, rule.selector, 'ExecReload'));
   return {
     name: 'wf-firewall.service',
     enabled: true,
@@ -670,6 +674,7 @@ export function firewallUnit(
       // so these are consulted before all of them — whichever was installed first, and across any number
       // of core restarts. That is a property of the priority, not of the order things happened in.
       ...rules,
+      ...reloadRules,
       '# No ExecStop: see the generator comment. Stopping this unit must not remove the rules, and',
       '# nothing here may flush a ruleset that other software has tables in.',
       '',

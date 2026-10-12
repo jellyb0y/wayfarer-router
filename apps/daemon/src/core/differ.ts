@@ -281,6 +281,7 @@ export function classifyPathExplicitly(path: string): BlastRadius | null {
   if (path === PATHS.firewall) return 'network';
   // Kernel settings: forwarding and IPv6 behaviour on the interface we serve.
   if (path === PATHS.sysctlDropIn) return 'network';
+  if (path === PATHS.networkdDropIn) return 'network';
   if (path.startsWith(`${PATHS.dhcpDir}/`)) return 'service';
   if (path === PATHS.coreConfig) return 'service';
   // Read by nothing that runs; written with the core configuration and classed with it in `diff`.

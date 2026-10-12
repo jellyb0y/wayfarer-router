@@ -102,6 +102,7 @@ test('the kill-switch rule only covers forwarded traffic, which is why fail-open
     wanInterfaces: ['wlan-wan'],
     managementPort: 8088,
     timePorts: [123],
+    clientsGoThroughCore: true,
   });
 
   // Split into chains so a rule cannot be credited to a chain it is not in.
@@ -125,4 +126,47 @@ test('the kill-switch rule only covers forwarded traffic, which is why fail-open
 
   // What the output chain does with the device's own traffic instead: marks it as already handled.
   assert.match(output, /meta skuid 0 meta mark set 0x1e7/);
+});
+
+/*
+ * The leak guard: what holds when the policy rules capturing clients are gone. Measured on the bench
+ * board, 2026-10-12: with them removed by `systemd-networkd`, the forward chain was `policy accept`, the
+ * kill-switch was off, and clients went out of the uplink past every tunnel.
+ */
+async function forwardChain(options: { killSwitch: boolean; clientsGoThroughCore: boolean }): Promise<string> {
+  const { generateFirewall } = await import('../src/core/generate/firewall.ts');
+  const profile = emptyProfile();
+  profile.firewall.killSwitch = options.killSwitch;
+  profile.network.cidr = '10.44.0.1/24';
+  const ruleset = generateFirewall({
+    profile,
+    lanInterface: 'wlanap',
+    wanInterfaces: ['end0', 'wfwan0'],
+    managementPort: 8088,
+    timePorts: [123],
+    clientsGoThroughCore: options.clientsGoThroughCore,
+  });
+  const start = ruleset.indexOf('chain forward {');
+  return ruleset.slice(start, ruleset.indexOf('\n  }', start));
+}
+
+test('with clients meant to go through the core, new forwarded connections to the internet are refused on every uplink, kill-switch off', async () => {
+  const forward = await forwardChain({ killSwitch: false, clientsGoThroughCore: true });
+  for (const wan of ['end0', 'wfwan0']) {
+    const rule = forward.split('\n').find((line) => line.includes(`oifname "${wan}"`));
+    assert.ok(rule, `a guard rule for ${wan}`);
+    assert.match(rule, /iifname "wlanap"/);
+    assert.match(rule, /ct state new/);
+    assert.match(rule, /reject$/);
+    // The local network stays reachable: the uplink's own network is excluded from capture on purpose.
+    for (const range of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16']) {
+      assert.ok(rule.includes(range), `${range} stays reachable`);
+    }
+    assert.match(rule, /ip daddr != \{/);
+  }
+});
+
+test('with no tunnel the direct path is the intended one, so no guard is written', async () => {
+  const forward = await forwardChain({ killSwitch: false, clientsGoThroughCore: false });
+  assert.doesNotMatch(forward, /reject$/m);
 });

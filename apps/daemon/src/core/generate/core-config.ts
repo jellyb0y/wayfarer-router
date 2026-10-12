@@ -23,6 +23,8 @@
  */
 
 import {
+  CORE_ROUTE_TABLE,
+  CORE_RULE_PRIORITY,
   CORE_TAGS,
   DEVICE_TUN_ADDRESS,
   FALL_THROUGH_DNS,
@@ -389,6 +391,9 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
          * carried out.
          */
         route_exclude_address: exclusions,
+        // Stated, not left to the core's defaults: the policy-rule check reads these numbers.
+        iproute2_table_index: CORE_ROUTE_TABLE,
+        iproute2_rule_index: CORE_RULE_PRIORITY,
         strict_route: false,
         /**
          * **`system`, the host's own network stack — verified to carry forwarded client traffic.**

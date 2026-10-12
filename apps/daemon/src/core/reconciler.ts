@@ -72,7 +72,8 @@
 
 import type { Platform } from '../platform/index.ts';
 import { ASIDE_SUFFIX } from '../platform/files.ts';
-import { isOwnedUnit, type DesiredState, type ManagedFile } from './desired-state.ts';
+import { isOwnedUnit, PATHS, type DesiredState, type ManagedFile } from './desired-state.ts';
+import { describePolicyRules, readPolicyRules, type PolicyRuleReading } from './policy-rules.ts';
 import type { BlastRadius, Plan2 } from './differ.ts';
 
 export type ApplyClass = BlastRadius;
@@ -519,6 +520,42 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileResult>
     }
   }
 
+  /* ── 3a'. networkd's own settings, which it reads only when it starts ───────────────────── */
+
+  /*
+   * `networkd.conf` and its drop-ins are read at start, so a change to ours is a restart of networkd —
+   * once per device, the first time the drop-in lands. That restart is itself what removes every policy
+   * rule this device depends on (measured, 2026-10-12; see `planner.ts`), so it marks the rules as
+   * disturbed and the step after the units puts them back.
+   */
+  let policyRulesDisturbed = false;
+  const networkdSettingsChanged = plan.fileChanges.some(
+    (change) => change.path === PATHS.networkdDropIn && APPLIABLE.has(change.blastRadius),
+  );
+  if (networkdSettingsChanged) {
+    policyRulesDisturbed = true;
+    const restarted = await record('restart systemd-networkd (its own settings changed)', async () => {
+      const result = await platform.systemd.restart('systemd-networkd.service');
+      return { ok: result.result === 'done', detail: `${result.result} after ${result.waitedMs} ms` };
+    });
+    if (!restarted.ok) {
+      const reasserted = await reassertPolicyRules(platform, desired, record);
+      return {
+        applied: false,
+        steps,
+        refused,
+        verificationFailures: [],
+        error: {
+          code: 'networkd_restart_failed',
+          message: `systemd-networkd did not restart with its new settings: ${restarted.detail}`,
+          hint:
+            `Policy rules after the attempt: ${reasserted.after}. Read \`journalctl -u systemd-networkd -b\`; ` +
+            'the confirmation window reverts the drop-in.',
+        },
+      };
+    }
+  }
+
   /* ── 3b. network configuration, then wait for it to settle ────────────────────────────── */
 
   const networkFilesChanged = plan.fileChanges.some(
@@ -547,6 +584,9 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileResult>
       };
     }
 
+    // A reconfigure removes the policy rules too on a device whose networkd still manages foreign
+    // rules — measured with `networkctl reconfigure end0`, 2026-10-12 — so they are checked after the units.
+    policyRulesDisturbed = true;
     await record(`reconfigure ${desired.managedInterfaces.map((entry) => entry.name).join(', ') || '(no interfaces)'}`, async () => {
       const result = await platform.net.reconfigure(desired.managedInterfaces.map((entry) => entry.name));
       return { ok: result.ok, detail: result.message === '' ? 'reconfigured' : result.message };
@@ -783,6 +823,29 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileResult>
     }
   }
 
+  /* ── 11b. the policy rules, after anything in this apply that removes them ───────────────── */
+
+  // After the units, so a core this apply restarted anyway has already put its own rules back and is
+  // not restarted a second time for nothing.
+  if (policyRulesDisturbed) {
+    const reasserted = await reassertPolicyRules(platform, desired, record);
+    if (!reasserted.ok) {
+      return {
+        applied: false,
+        steps,
+        refused,
+        verificationFailures: [],
+        error: {
+          code: 'policy_rules_missing',
+          message: `The policy rules this device depends on are not in place: ${reasserted.after}.`,
+          hint:
+            'Without them the device either loops its own tunnel connections into the tunnel or sends ' +
+            'clients past it. The confirmation window reverts this apply.',
+        },
+      };
+    }
+  }
+
   /* ── 12. verify: active AND enabled ──────────────────────────────────────────────────── */
 
   /**
@@ -955,4 +1018,77 @@ export function orderUnitChanges<T extends { name: string; action: string }>(cha
     .map((change, index) => ({ change, index }))
     .sort((a, b) => stage(a.change) - stage(b.change) || a.index - b.index)
     .map((entry) => entry.change);
+}
+
+/**
+ * Puts the policy rules back where something removed them, and says what it found and did.
+ *
+ * Here rather than in the observer that also calls it, because restarting units is a side effect and
+ * side effects belong to the reconciler. The bypass is restored by restarting `wf-firewall.service`,
+ * whose `ExecStartPost` writes it idempotently; the core's capture by restarting `wf-core.service`,
+ * which installs it on start. Nothing else is touched, and a set that is present is left alone.
+ *
+ * `ok` is decided by reading the rules again afterwards — not by the restarts returning `done`.
+ */
+export async function reassertPolicyRules(
+  platform: Platform,
+  desired: Pick<DesiredState, 'policyRules'>,
+  record: (step: string, run: () => Promise<{ ok: boolean; detail: string }>) => Promise<{ ok: boolean; detail: string }>,
+): Promise<{ ok: boolean; before: string; after: string; acted: string[] }> {
+  const expected = desired.policyRules;
+  if (expected === undefined) return { ok: true, before: 'not described by this plan', after: 'not checked', acted: [] };
+
+  const read = async (): Promise<PolicyRuleReading | null> => {
+    const rules = await platform.net.rules();
+    if (rules === null) return null;
+    const coreActive = expected.core && (await platform.systemd.state('wf-core.service')).isActive;
+    return readPolicyRules({ rules, timePorts: expected.timePorts, coreActive });
+  };
+
+  const before = await read();
+  if (before === null) return { ok: false, before: 'could not read the policy rules', after: 'unknown', acted: [] };
+  const acted: string[] = [];
+  if (before.missingBypass.length > 0) {
+    acted.push('wf-firewall.service');
+    // A reload, not a restart: the unit's `ExecReload` writes only these rules, and a restart would take
+    // the core and the access point down with it (see `firewallUnit`). A unit that is not active cannot
+    // be reloaded, and then a restart is the only way the rules come back.
+    const firewallActive = (await platform.systemd.state('wf-firewall.service')).isActive;
+    await record(
+      `reinstate the device's own bypass rules (${before.missingBypass.join(', ')}) by ${firewallActive ? 'reloading' : 'restarting'} wf-firewall.service`,
+      async () => {
+        const result = firewallActive
+          ? await platform.systemd.reload('wf-firewall.service')
+          : await platform.systemd.restart('wf-firewall.service');
+        return { ok: result.result === 'done', detail: result.result };
+      },
+    );
+  }
+  if (before.coreCaptureMissing) {
+    acted.push('wf-core.service');
+    await record("reinstate the core's capture rules by restarting wf-core.service", async () => {
+      const result = await platform.systemd.restart('wf-core.service');
+      return { ok: result.result === 'done', detail: result.result };
+    });
+  }
+  // The core installs its rules a moment after its unit reports started; read again until they are
+  // there or a short bound passes, so a slow start is not reported as a failure.
+  let after = acted.length === 0 ? before : await read();
+  for (let waited = 0; after !== null && after.coreCaptureMissing && acted.includes('wf-core.service') && waited < 10_000; waited += 500) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    after = await read();
+  }
+  const ok = after !== null && after.missingBypass.length === 0 && !after.coreCaptureMissing;
+  if (acted.length > 0 || !ok) {
+    await record('check the policy rules', async () => ({
+      ok,
+      detail: after === null ? 'could not read the policy rules' : describePolicyRules(after),
+    }));
+  }
+  return {
+    ok,
+    before: describePolicyRules(before),
+    after: after === null ? 'could not read the policy rules' : describePolicyRules(after),
+    acted,
+  };
 }

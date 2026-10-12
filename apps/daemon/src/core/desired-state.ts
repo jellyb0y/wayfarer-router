@@ -45,6 +45,12 @@ export const PATHS = {
   socksDir: `${CONFIG_ROOT}/socks`,
   networkdDir: '/etc/systemd/network',
   /**
+   * A drop-in for networkd's own settings, not for a link. Declared as the file rather than the
+   * directory: the directory is shared with whatever else configures networkd, and a factory reset
+   * removes what is named here.
+   */
+  networkdDropIn: '/etc/systemd/networkd.conf.d/50-wayfarer.conf',
+  /**
    * The core's own cache, which is what makes a downloaded rule set survive a restart.
    *
    * Named here rather than written twice: the generator turns it on (`generate/core-config.ts`) and
@@ -376,6 +382,11 @@ export interface DesiredState {
   managedInterfaces: ManagedInterface[];
   /** Anything the operator should read before applying, carried through to the plan review. */
   notes: string[];
+  /**
+   * The policy rules this state depends on, for the check that reinstates them after something removed
+   * them (`core/policy-rules.ts`). Optional so a state built by hand in a test need not say.
+   */
+  policyRules?: { timePorts: number[]; core: boolean };
 }
 
 export function emptyDesiredState(): DesiredState {

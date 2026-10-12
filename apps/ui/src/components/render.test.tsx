@@ -368,8 +368,10 @@ describe('the choice about traffic leaving unprotected', () => {
   it('says what the kill-switch actually covers, rather than naming it', () => {
     render(<LeakPolicy document={docWith(false, 'block')} />);
     // The word "kill-switch" is not what tells anybody anything; the failure it covers is.
-    expect(screen.getByText(/crashed or unstarted tunnel/)).toBeTruthy();
-    expect(screen.getByText(/looks like a working network/)).toBeTruthy();
+    // Since 2026-10-12 traffic bypassing a configured tunnel is refused whatever the switch says, so
+    // the help says that, and says what the switch adds on top.
+    expect(screen.getByText(/traffic that would bypass it is always refused/)).toBeTruthy();
+    expect(screen.getByText(/local network is refused too/)).toBeTruthy();
   });
 
   it('explains the contradiction in the flow of the page, and only when it exists', () => {

@@ -544,6 +544,21 @@ function render(scenario: (typeof SCENARIOS)[number]): string {
   return `${sections.join('\n')}\n`;
 }
 
+/*
+ * The same tunnels with the kill-switch at its default, off. What it pins is the leak guard: measured on the
+ * bench board, 2026-10-12, a profile like this sent clients past every tunnel once the core's policy rules
+ * were gone. The guard must appear here without any profile setting asking for it.
+ */
+{
+  const everything = SCENARIOS.find((scenario) => scenario.name === 'tunnels-routing-and-killswitch');
+  if (everything === undefined) throw new Error('the tunnels scenario is missing');
+  SCENARIOS.push({
+    ...everything,
+    name: 'tunnels-kill-switch-off',
+    profile: { ...everything.profile, firewall: { ...everything.profile.firewall, killSwitch: false } },
+  });
+}
+
 for (const scenario of SCENARIOS) {
   test(`golden: ${scenario.name}`, () => {
     const rendered = render(scenario);

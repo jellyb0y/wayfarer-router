@@ -32,6 +32,7 @@ import { resolveRef } from '@wayfarer/protocols/json';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { allPolicyRules } from './helpers/policy-rules.ts';
 
 /**
  * The real schema from the bench board, served by the stand-in exactly as the binary would.
@@ -148,6 +149,7 @@ function fakePlatform(options: { transientFails?: boolean; unwritable?: string[]
        * rule is the one standing between a slow DHCP server and a device that refuses to configure
        * itself. The timeout is not waited out because the stand-in has no clock to wait on.
        */
+      rules: async () => allPolicyRules(),
       waitForSettle: async (interfaces: { name: string; expect: string }[]) => {
         trace.push(`net:wait ${interfaces.map((entry) => `${entry.name}/${entry.expect}`).join(',')}`);
         return {

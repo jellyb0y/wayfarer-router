@@ -84,7 +84,12 @@ export function LeakPolicy({ document }: LeakPolicyProps): ReactElement {
         pointer="/firewall/killSwitch"
         label="Kill switch"
         checked={killSwitch}
-        help="Off, a crashed or unstarted tunnel passes traffic straight out and looks like a working network."
+        help={
+          // Since 2026-10-12 the device refuses clients' internet traffic that bypasses the core whenever
+          // the profile has a tunnel, whatever this says (the leak guard, `generate/firewall.ts`). This
+          // switch is the stricter form: it also refuses the uplink's local network, and applies with no tunnel.
+          'With a tunnel configured, traffic that would bypass it is always refused. On, the uplink’s local network is refused too, and this holds even with no tunnel.'
+        }
       />
 
       {contradicts(killSwitch, onAllDown) ? (

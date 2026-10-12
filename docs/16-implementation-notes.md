@@ -6205,3 +6205,90 @@ uplink, i.e. still resolved through the tunnel.
 outbound for remote rule-sets is deprecated in sing-box 1.14.0 and will be removed in sing-box
 1.16.0". The generated `route.rule_set` entries carry no download detour; an upgrade to 1.16 has to
 add one or remote sets stop being fetched.
+
+**Cause established by experiment, 2026-10-12, systemd 257.13 on the bench board.** With all eleven
+rules present (8000–8002 and the core's 9000–9010), each step below was followed by `ip rule`:
+
+| Step | 8000–8002 | 9000–9010 |
+|---|---|---|
+| `systemctl restart systemd-networkd` | removed | removed |
+| 13 s later, nothing else done | still absent | still absent — the core does not put them back |
+| `systemctl restart wf-firewall` | back | absent |
+| `systemctl restart wf-core` | present | back |
+| `networkctl reload` | kept | kept |
+| `networkctl reconfigure end0` | removed | removed |
+
+`ip -d rule` shows every one of these rules as `proto unspec`; `ManageForeignRoutingPolicyRules` is at
+its default `yes`. So the assumption above is now a measurement: networkd removes every policy rule it
+did not create, on its own start **and** on a reconfiguration of a link. The boot loss is the first
+case — `wf-firewall` is ordered `Before=network-pre.target` on purpose, so networkd always starts after
+it. The second case is worse than the boot one: anything that reconfigures a link while the device is
+running removes the core's rules too, and neither the firewall unit nor the core reinstates them.
+
+The `reconfigure` step was run on the board while it served clients and left it with no policy rules
+until the two units were restarted by hand; a later experiment of this kind belongs on a board with
+nobody behind it.
+
+Seen in passing: `end0` was configured from `/run/systemd/network/10-netplan-all-eth-interfaces.network`
+(generated from Armbian's `/etc/netplan/10-dhcp-all-interfaces.yaml`, `match: name: "e*"`), which sorts
+before `20-wayfarer-wan-eth.network`, so the generated file for that uplink is not the one in effect.
+Not related to the rule loss; recorded so it is not rediscovered.
+
+**Decision, 2026-10-12: three layers, none of them a profile setting.**
+
+1. *Nothing removes the rules.* The planner writes `/etc/systemd/networkd.conf.d/50-wayfarer.conf` with
+   `ManageForeignRoutingPolicyRules=no` for every profile. networkd reads it only at start, so the
+   reconciler restarts networkd when the file changes — once per device — and that restart is itself a
+   removal, so the same apply then reinstates the rules (`reassertPolicyRules`) and fails if they are not
+   back, inside the confirmation window.
+2. *A leak is impossible while they are missing.* Before this, with the core's rules gone, clients went
+   out of the uplink past every tunnel: the forward chain was `policy accept`, `postrouting` masqueraded
+   on `end0`, and the kill-switch was off — its default. Now, whenever the core is in the plan and the
+   profile has an enabled tunnel, the forward chain refuses new client connections to the uplink for any
+   destination outside the private and link-local ranges. The kill-switch flag no longer decides this; it
+   remains as the stricter form (it also refuses the uplink's local network, and applies with no tunnel).
+3. *If they go anyway, they come back and it is visible.* The `policy-rules` observer reads `ip -j rule`
+   every 30 s and on every rule event, restarts `wf-firewall` and/or `wf-core` for whichever set is
+   missing, never during an apply, at most once a minute and not after three repairs that did not hold,
+   and records each repair in the event log.
+
+Why the alternatives lost:
+
+- **Ordering the firewall after networkd.** It gives up "rules before the network", and a `reconfigure`
+  — which the reconciler itself runs — still removes every rule.
+- **`RoutingPolicyRule=` in our `.network` files.** networkd would own the bypass, but it cannot express
+  the core's rules, and the rules would follow one link's lifetime.
+- **The observer alone.** It heals, but there is a window of up to 30 s on every boot with no bypass and,
+  without layer 2, a leak.
+- **Matching "on-link" in nftables instead of private ranges.** `rt ip nexthop != ip daddr` is refused
+  by nftables 1.1.3 on the board (`syntax error, unexpected counter`): the right-hand side must be a
+  constant. Writing the uplink's networks into the ruleset would make the file depend on where the
+  board is plugged in, and the re-derivation that keeps the core's exclusion list current works on JSON
+  pointers, not on a text ruleset. Private ranges need no reading; the cost is that a client cannot reach
+  an uplink network with public addresses directly, which fails closed.
+
+The core's routing table and first rule priority (2022, 9000) are now written into its configuration as
+`CORE_ROUTE_TABLE` / `CORE_RULE_PRIORITY` instead of left to sing-box's defaults, because the check reads
+those numbers. `sing-box check` on the board accepted the two fields, 2026-10-12.
+
+**Measured on the board after deploying it, 2026-10-12.**
+
+- Applying the change: the reconciler wrote the drop-in, restarted networkd (472 ms), and every rule was
+  present at the end of the apply.
+- `networkctl reconfigure end0`, then `systemctl restart systemd-networkd`: all eleven rules present
+  after each, and no repair was needed — the drop-in, not the observer, kept them.
+- `ip rule del priority 8000`: back after 1.3 s, through `systemctl reload wf-firewall`, with the PIDs of
+  `wf-core` and `wf-hostapd@` unchanged. The first version restored it by **restarting** `wf-firewall`,
+  which also stopped and started `wf-core`, `wf-hostapd@` and `wf-dhcp@` (they `Require`
+  `wf-firewall-ready.target`): the rule came back in 1.6 s and the radio dropped its client to do it.
+  That is also the explanation of the earlier note above that a firewall restart "removed" 9000–9010:
+  it stopped the core, which removes its rules on stop. The repair is now an `ExecReload` that writes
+  only the bypass rules.
+- Leak test: `systemctl stop wf-core` for 45 s with one client on the access point. The core's rules
+  were gone (8000–8002 only), and the leak guard's counter rose from 0 to 554 rejected packets. A second
+  45 s run with temporary counters ahead of the guard saw the client attempt nothing at all (0 new, 0
+  established, 0 private), so it proves nothing either way and is recorded as such.
+- Reboot at 10:30:31: the API answered after 112 s, the watchdog had selected a tunnel at 142 s, all
+  eleven rules were present, and the event log held no `policy-rules.reinstated` — the rules were never
+  missing. Monotonic order on that boot: `wf-firewall` finished 10.93 s, networkd started 13.39 s,
+  `wf-core` started 107.07 s — the same order that lost the rules on two boots before the drop-in.

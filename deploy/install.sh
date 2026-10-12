@@ -374,6 +374,9 @@ install_unit() {
   # have kept, unlike redirecting where logs are stored, which is why it is applied even on
   # a shared machine while `Storage=` is left alone.
   run_step install -d -m 0755 /etc/systemd/journald.conf.d
+  # The daemon writes a networkd drop-in here and its sandbox names the directory, which systemd
+  # requires to exist when the unit starts.
+  run_step install -d -m 0755 /etc/systemd/networkd.conf.d
   run_step install -m 0644 "$SOURCE_DIR/deploy/systemd/50-wayfarer-journal.conf" \
     /etc/systemd/journald.conf.d/50-wayfarer-journal.conf
   run_step systemctl daemon-reload

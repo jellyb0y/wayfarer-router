@@ -37,7 +37,37 @@ export interface FirewallInput {
   managementPort: number;
   /** Ports time synchronisation uses. Configuration, not a constant at the call site. */
   timePorts: number[];
+  /**
+   * Whether clients' traffic is meant to reach the internet only through the proxy core: the core is
+   * part of this plan and the profile has at least one enabled tunnel. Decided by the planner, never
+   * by a profile field — see {@link LEAK_GUARD_PRIVATE_V4}.
+   */
+  clientsGoThroughCore: boolean;
 }
+
+/**
+ * The destinations a client may still be forwarded to directly while the core captures its traffic.
+ *
+ * **Why the leak guard exists at all.** The core captures clients with policy rules (9000–9010), and
+ * those rules are not ours to keep alive. Measured on the bench board, 2026-10-12: `systemd-networkd`
+ * removed every one of them on its own start and on `networkctl reconfigure end0`, and with them gone a
+ * client's traffic followed the main table out of the uplink — masqueraded, to the internet, past every
+ * tunnel. The forward chain was `policy accept` and the kill-switch was off, which is its default. So
+ * this rule is unconditional whenever clients are meant to go through the core: it does not depend on
+ * the policy rules existing, and it is not a profile setting anybody has to remember.
+ *
+ * **Why private ranges and not the uplink's own network.** What is legitimately forwarded is traffic
+ * to the networks the core excludes from capture — the uplink's own network, so a client can reach a
+ * printer or the upstream router. That network is read off the device and changes when the board is
+ * plugged in elsewhere, and this file would then be stale until re-derived. Comparing the next hop to
+ * the destination would say "on-link" without knowing the network, but nftables 1.1.3 refuses it:
+ * the right-hand side of a comparison must be a constant (measured on the board, 2026-10-12: `syntax
+ * error, unexpected counter` on `rt ip nexthop != ip daddr`). Private and link-local ranges cover every
+ * network an uplink hands out in practice and none of the internet, so the guard needs no reading at
+ * all. The cost: an uplink network with public addresses is unreachable from clients directly — it
+ * fails closed, which is the side this rule exists to fail on.
+ */
+const LEAK_GUARD_PRIVATE_V4 = ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'];
 
 export function generateFirewall(input: FirewallInput): string {
   const { profile, lanInterface, wanInterfaces, managementPort } = input;
@@ -196,6 +226,16 @@ export function generateFirewall(input: FirewallInput): string {
       // host form and normalise it, which is the kind of luck that stops being luck in a different field.
       lines.push(
         `    iifname "${lan}" oifname "${interfaceName}" ip daddr != ${networkCidr(profile.network.cidr) ?? profile.network.cidr} ct state new reject`,
+      );
+    }
+    lines.push('');
+  } else if (input.clientsGoThroughCore && lan !== null && wan.length > 0) {
+    lines.push('    # The leak guard. Clients reach the internet only through the core; this is what holds');
+    lines.push('    # when the policy rules capturing them are gone, so a client is refused rather than');
+    lines.push('    # forwarded past every tunnel. Private ranges stay reachable for the local network.');
+    for (const interfaceName of wan) {
+      lines.push(
+        `    iifname "${lan}" oifname "${interfaceName}" ip daddr != { ${LEAK_GUARD_PRIVATE_V4.join(', ')} } ct state new counter reject`,
       );
     }
     lines.push('');

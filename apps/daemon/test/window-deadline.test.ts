@@ -40,6 +40,7 @@ import { createProfileStore } from '../src/state/profiles.ts';
 import { createSecretPlan } from '../src/state/secret-plan.ts';
 import type { Platform } from '../src/platform/index.ts';
 import { builtInAndDongle, cleanFacts } from './helpers/synthetic-inventory.ts';
+import { allPolicyRules } from './helpers/policy-rules.ts';
 
 const CORE_SCHEMA = readFileSync(
   `${dirname(fileURLToPath(import.meta.url))}/../../../packages/protocols/test/fixtures/core-schema-sing-box-1.14.0.json`,
@@ -99,6 +100,7 @@ function fakePlatform(clock: { uptime: number }) {
       }),
       reload: async () => ({ ok: true, message: '' }),
       reconfigure: async () => ({ ok: true, message: '' }),
+      rules: async () => allPolicyRules(),
       waitForSettle: async (interfaces: { name: string; expect: string }[]) => ({
         settled: false,
         perInterface: interfaces.map((entry) => ({ ...entry, carrier: false, address: null, ok: false })),

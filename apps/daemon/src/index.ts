@@ -52,6 +52,7 @@ import { CLAIM_DIRECTORIES, CORE_CANDIDATES, devicePipeline } from './core/devic
 import { followDevice } from './core/device-follower.ts';
 import { observeAddresses } from './core/address-watch.ts';
 import { createObserverRegistry } from './core/observers.ts';
+import { watchPolicyRules } from './core/rules-watch.ts';
 import { observeCapturedResolvers } from './core/resolver-watch.ts';
 import { listenForTransactionsEndedElsewhere } from './core/transaction-ended.ts';
 import { readStamp } from './core/credential-expiry.ts';
@@ -620,6 +621,17 @@ async function main(): Promise<void> {
    * and it runs when a tunnel first connects, after the daemon has started, so on a normal boot this
    * watch cannot be established at the moment it is first attempted. It retries every 30 s.
    */
+  /*
+   * The policy rules, checked and reinstated without a shell on the device. See `core/rules-watch.ts`.
+   */
+  const rulesWatch = watchPolicyRules({
+    observers,
+    platform,
+    timePorts: config.timePorts,
+    applying: () => profiles.recentTransactions(5).some((row) => row.state === 'applying'),
+    record: (event) => store.recordEvent(event),
+  });
+
   const resolverWatch = observeCapturedResolvers({
     observers,
     onCapture: () => void resolverFollower.check('capture-changed'),
@@ -1039,6 +1051,7 @@ async function main(): Promise<void> {
     // Stopped with the rest. It holds a file-system watch and a retry timer, and a shutdown that
     // leaves them is a process that will not exit when something else holds a handle too.
     resolverWatch.stop();
+    rulesWatch.stop();
     stopListeningForEnds();
     await stopTelemetry();
     listeners.stopAll();

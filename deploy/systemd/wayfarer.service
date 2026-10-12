@@ -147,7 +147,12 @@ ProtectHome=yes
 # The general lesson is in the reconciler's `paths-writable` check rather than in this line: a sandbox's
 # writable set and a planner's intentions are two descriptions of what we may touch, and they drift. A test
 # now compares them mechanically, so this list can no longer silently disagree with what the generators do.
-ReadWritePaths=/etc/wayfarer /var/lib/wayfarer /usr/local/lib/systemd/system /etc/systemd/network /etc/netplan /etc/sysctl.d /run /tmp
+#
+# `/etc/systemd/networkd.conf.d` holds one generated file, `50-wayfarer.conf`, which stops networkd removing
+# the policy rules this device and its core install. Measured on the bench board, 2026-10-12: without it
+# every boot and every link reconfiguration removed them. The directory must exist when this unit starts,
+# which is why the installer creates it; Debian and Armbian ship it already.
+ReadWritePaths=/etc/wayfarer /var/lib/wayfarer /usr/local/lib/systemd/system /etc/systemd/network /etc/systemd/networkd.conf.d /etc/netplan /etc/sysctl.d /run /tmp
 ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectControlGroups=yes

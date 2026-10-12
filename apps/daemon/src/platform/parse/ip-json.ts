@@ -231,3 +231,40 @@ export function parseRouteGet(json: string): { device: string | null; source: st
   if (first === undefined) return null;
   return { device: asString(first['dev']), source: asString(first['prefsrc']) };
 }
+
+/** One policy rule, as `ip -j rule show` reports it. Only the fields this device asks about. */
+export interface PolicyRule {
+  priority: number;
+  /** A table name (`main`, `local`) or number as text (`2022`); null for a `goto` or `nop` rule. */
+  table: string | null;
+  iif: string | null;
+  uidStart: number | null;
+  uidEnd: number | null;
+  ipproto: string | null;
+  dport: number | null;
+  /** The rule's selector is inverted (`not from …`). */
+  inverted: boolean;
+}
+
+export function parseIpRules(json: string): PolicyRule[] {
+  return asArray(json).flatMap((entry) => {
+    const priority = asNumber(entry['priority']);
+    if (priority === null) return [];
+    const table = entry['table'];
+    return [
+      {
+        priority,
+        // `ip` prints a named table as a string and an unnamed one as a number in some builds; one
+        // type here so a comparison never depends on which.
+        table: typeof table === 'number' ? String(table) : asString(table),
+        iif: asString(entry['iif']),
+        uidStart: asNumber(entry['uid_start']),
+        uidEnd: asNumber(entry['uid_end']),
+        ipproto: asString(entry['ipproto']),
+        dport: asNumber(entry['dport']),
+        // `"not": null` is how the flag is printed: present means set, whatever its value.
+        inverted: 'not' in entry,
+      },
+    ];
+  });
+}

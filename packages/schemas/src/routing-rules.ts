@@ -192,6 +192,17 @@ export const DEVICE_MARK = 0x1e7;
  */
 export const DEVICE_MARK_RULE_PRIORITY = 8000;
 
+/**
+ * The routing table and the first policy-rule priority the proxy core's `auto_route` uses.
+ *
+ * Both equal the core's own defaults (measured on the bench board, sing-box 1.14.0: rules 9000–9010,
+ * table 2022) and are written into its configuration anyway, so that the check that the core's rules
+ * still exist (`core/policy-rules.ts`) reads the same number the core was told rather than a default
+ * that could move under it.
+ */
+export const CORE_ROUTE_TABLE = 2022;
+export const CORE_RULE_PRIORITY = 9000;
+
 export interface RoutingContext {
   /** Uplink interface names, so the protect anchor can match on them. */
   uplinkInterfaces: string[];

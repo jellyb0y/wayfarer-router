@@ -14,10 +14,12 @@ import {
   parseIpAddresses,
   parseIpLinks,
   parseIpRoutes,
+  parseIpRules,
   parseRouteGet,
   type NetAddress,
   type NetLink,
   type NetRoute,
+  type PolicyRule,
 } from './parse/ip-json.ts';
 
 export interface NetSnapshot {
@@ -41,6 +43,11 @@ export interface NetReader {
    * `null` when the question could not be answered — a third value, not a "no".
    */
   routeTo(address: string): Promise<{ device: string | null; source: string | null } | null>;
+  /**
+   * The IPv4 policy rules. `null` when they could not be read — a third value, because "no rules" is a
+   * finding and "could not look" is not, and a check that confused them would restart units for nothing.
+   */
+  rules(): Promise<PolicyRule[] | null>;
   snapshot(): Promise<NetSnapshot>;
   /**
    * Calls `onChange` with a fresh snapshot after the monitor goes quiet for
@@ -48,6 +55,12 @@ export interface NetReader {
    * events within milliseconds — becomes one re-read.
    */
   watch(onChange: (snapshot: NetSnapshot) => void, debounceMs?: number): StreamHandle;
+  /**
+   * Calls `onChange` after a burst of policy-rule events goes quiet. Separate from `watch`, whose
+   * consumers re-read links, addresses and routes on every event and have no use for rule churn — a
+   * core start alone writes eleven rules.
+   */
+  watchRules(onChange: () => void, debounceMs?: number): StreamHandle;
   /**
    * One ICMP echo to `address`, sent **bound to `interfaceName`**, and what came of it.
    *
@@ -162,6 +175,12 @@ export function createNetReader(ipPath = IP, networkctlPath = NETWORKCTL, pingPa
       }
     },
 
+    async rules() {
+      const result = await run(ipPath, ['-j', '-4', 'rule', 'show'], { timeoutMs: 5000 });
+      if (result.code !== 0 || result.timedOut) return null;
+      return parseIpRules(result.stdout);
+    },
+
     async snapshot() {
       const [links, addresses, routes] = await Promise.all([
         reader.links(),
@@ -205,6 +224,38 @@ export function createNetReader(ipPath = IP, networkctlPath = NETWORKCTL, pingPa
       // the network to change before it sees anything.
       trigger();
 
+      return {
+        stop(): void {
+          stopped = true;
+          if (timer) clearTimeout(timer);
+          handle.stop();
+        },
+      };
+    },
+
+    watchRules(onChange, debounceMs = 1000) {
+      let timer: NodeJS.Timeout | undefined;
+      let stopped = false;
+      const trigger = (): void => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (!stopped) onChange();
+        }, debounceMs);
+        timer.unref();
+      };
+      let handle: StreamHandle = startMonitor();
+      function startMonitor(): StreamHandle {
+        return streamLines(ipPath, ['-4', 'monitor', 'rule'], {
+          onLine: trigger,
+          onExit: () => {
+            // The same rule as `watch`: an event source that died must not look like quiet.
+            if (stopped) return;
+            setTimeout(() => {
+              if (!stopped) handle = startMonitor();
+            }, 1000).unref();
+          },
+        });
+      }
       return {
         stop(): void {
           stopped = true;
