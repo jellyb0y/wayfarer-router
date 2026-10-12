@@ -278,6 +278,15 @@ export const VlessConfig = Source('person', Type.Object(
     /** The `Host` header, when it differs from `serverName`. */
     host: Type.Optional(Type.String({ maxLength: 253 })),
     /**
+     * Plain TCP disguised as HTTP: the link's `headerType=http`. Only meaningful with `network: "tcp"`.
+     *
+     * Not decoration. Measured on the bench board, 2026-10-11: a server expecting it closed every
+     * connection made without it (`ML-KEM-768 handshake failed > unexpected EOF` in the client), and the
+     * same client with the header carried traffic. Dropping it at the parse produced a tunnel that could
+     * never work and a profile that validated cleanly.
+     */
+    headerType: Type.Optional(Type.Union([Type.Literal('none'), Type.Literal('http')])),
+    /**
      * Only when `security` is `reality`, and **both are needed together.**
      *
      * The pair cannot be expressed as a requirement here — it is conditional on a sibling field — so

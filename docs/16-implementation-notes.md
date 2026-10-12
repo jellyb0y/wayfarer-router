@@ -6094,3 +6094,114 @@ it beside the temporary directory rather than in it. It is now `join(tmpdir(), �
 switch has only ever been `way machine-api on` (by decision, `docs/10`), and no screen called the token
 routes at all; the sentence was `docs/08`'s plan restated in the present tense. Corrected in both, with
 the card that now exists.
+
+## `--corp` for `--collect`: the revert timer could never be armed (2026-10-11)
+
+**Symptom.** Switching the bench board to a second profile through the API: activation succeeded, and
+`POST /api/apply` answered `503 revert_timer_unavailable` with
+`/usr/bin/systemd-run: unrecognized option '--corp'`. The plan was `network`, so nothing was applied.
+
+**What was found.** `runTransient` in `platform/systemd.ts` passed `--corp` where its own comment
+describes `--collect` ("collected once it has run"). `systemd-run` rejects an unknown option before
+creating anything, so the confirmation window — the thing every `network` apply depends on — did not
+exist, and the apply correctly refused to proceed without it. The same misspelling was in the bench
+deadman's backstop (`deploy/bench/wayfarer-deadman`), where the call ends in `|| true`: the backstop
+that forces a reset if `systemctl reboot` hangs would have failed silently on the day it was needed.
+It was also copied into `docs/15`.
+
+**Decision.** `--collect` in all three places, and `test/systemd-run-argv.test.ts`, which runs
+`runTransient` against a stand-in `systemd-run` that records its arguments and checks each option
+against the set this code is allowed to use. Verified in both directions: it fails on `--corp` with
+`systemd-run does not know --corp` and passes on `--collect`.
+
+**Why a test and not only the fix.** Every earlier test stubbed the controller one level up, so the
+command line itself was never executed by anything except the board. A misspelt flag inside a string
+literal has no type to fail against; only running it does.
+
+**What is not measured.** That the deadman's backstop now arms on the board: it runs only when the
+deadman fires, and nothing here fires it on purpose. `--collect` exists in systemd since version 236;
+the board's version was not read for this note. [assumption]
+
+## `headerType=http` was dropped at the parse, and the tunnel could never connect (2026-10-11)
+
+**Symptom.** After the profile switch above was applied, both subscription tunnels were unhealthy, the
+watchdog selected `block`, and nothing behind the access point reached the internet. The board itself
+reached both servers on TCP 8080.
+
+**What was found.** Both links carried `type=tcp&headerType=http&host=…&path=/` — plain TCP disguised
+as an HTTP request. The VLESS parser read `host` and `path` but not `headerType`, the schema had no
+field for it, and the external client was generated with bare TCP. The server dropped every such
+connection; the client logged `ML-KEM-768 handshake failed > unexpected EOF`. A hand-made copy of the
+generated client configuration with `tcpSettings.header.type = "http"` carried traffic at once.
+
+**Decision.** `headerType` (`none` | `http`) joins `VlessConfig` as an optional field set by a person or
+a link. The parser keeps it for TCP links, `http` forces the external client (the proxy core has no
+such disguise for plain TCP), and the client configuration gets `tcpSettings.header`. The form has a
+control for it, so the parity count moves 121 → 122.
+
+**Measured after the fix**, on the board through each client's local port: `api.ipify.org` answered
+`5.39.255.51` through `germany` and `82.22.50.101` through `france`, and the watchdog selected
+`germany`.
+
+## After a reboot the device's own-traffic rule was gone, and every tunnel looped into itself (2026-10-11)
+
+**Symptom.** Minutes after the switch above was confirmed working, the watchdog read both tunnels
+unhealthy and selected `block`. The board had rebooted at 18:15:34 UTC (orderly shutdown in the
+journal; what initiated it was not established — the bench deadman did not fire and was not armed).
+
+**What was found.** `ip rule` had the core's 9000–9010 rules and **no** 8000–8002: the rules that send
+the device's own traffic (uid 0, and time queries) to the main table. So the external client's own
+connection to its VPN server was routed into `tun0`, through the core, into the selector that was
+`block`; the client logged `read tcp 172.19.0.1:…->82.22.50.101:8080: connection reset`. A loop that
+can never heal: the tunnel cannot become healthy because its transport rides the tunnel.
+
+`wf-firewall.service` had run its `ExecStartPost` rule commands at 21:15:42 local, all with status 0.
+`systemd-networkd` started at 21:15:44 and configured `end0`. `ManageForeignRoutingPolicyRules` is at
+its default (`yes`, commented out in `/etc/systemd/networkd.conf`), under which networkd removes
+policy rules it did not create. **Assumption, not proved:** that is what removed 8000–8002. It fits the
+order of events; the removal itself was not observed.
+
+A second observation not yet explained: `systemctl restart wf-firewall` restored 8000–8002, and after it
+the core's 9000–9010 were absent until `systemctl restart wf-core` put them back. Both sets present
+afterwards, the client path was `via 172.19.0.2 dev tun0 table 2022` and the device's own path to the
+VPN server `via 192.168.1.1 dev end0`.
+
+**Not yet decided.** Candidates: a networkd drop-in with `ManageForeignRoutingPolicyRules=no`; ordering
+the firewall unit after networkd; or a check in the watchdog that the own-traffic rules exist, since
+their absence turns "all tunnels down" into a state the device cannot leave by itself. Whatever is chosen
+has to be proved by a reboot on the board.
+
+**Reproduced on the next boot, 2026-10-12.** The board came up again (wall clock about 08:28 local;
+`journalctl --list-boots` shows 23:00:02 for the same boot because the board has no real-time clock and
+the time was stepped later). At 08:40 `ip rule` again had 9000–9010 and no 8000–8002, and the watchdog
+reported `failover 0 of 2 healthy, selected block`. The monotonic order was the same as the first time:
+`wf-firewall.service` finished at 25.476 s, `systemd-networkd.service` started at 25.487 s and was up at
+26.894 s, `wf-core.service` started at 109.17 s. Restarting `wf-firewall` and then `wf-core` restored all
+eleven rules, and the watchdog selected a tunnel within one round. Two boots out of two lost the rules,
+so this is the normal outcome of a boot with the current units, not an occasional race.
+
+## A rule set sent direct did not send its names to the direct resolver (2026-10-12)
+
+**Symptom.** The owner asked for Russian sites to go direct *and* to be resolved by the uplink's
+resolver rather than by `dns.overTunnel`. `directDnsRules` mirrored only `domain` and `domainSuffix`
+rules into DNS; a `ruleSet` rule sending `geosite-ru` direct routed the connection direct but left the
+name to the tunnel resolver, so a CDN answered for the tunnel's exit country.
+
+**Why not mirror every `ruleSet` rule.** An address-only set in a sing-box DNS rule is an address
+filter: the query is sent to the rule's server first and the answer is then matched against the set.
+Mirroring `geoip-ru` would put every name the clients look up in front of the uplink's resolver, in
+clear, before deciding anything. The sing-box migration notes ("Migrate address filter fields to
+response matching") also say such a rule is refused at startup once any 1.14 DNS feature is used. The
+contents of a remote set are not known while planning — the core fetches it later.
+
+**Decision.** `RuleSet.contents` (`domains` | `addresses`, optional) states what the set holds. A
+direct `ruleSet` rule is mirrored into DNS only for the sets stated to hold domains; an unstated set is
+never mirrored. Measured on the board after applying, through the core's resolver at 10.44.0.1 against
+the uplink's at 192.168.1.1: `vk.com` (matched only by `geosite-ru`), `yandex.ru` and `2ip.ru` got the
+same answers from both; `google.com` got `142.251.20.x` from the core and `172.253.152.x` from the
+uplink, i.e. still resolved through the tunnel.
+
+**Seen in passing.** sing-box 1.14.0 logs at start: "implicit default HTTP client using default
+outbound for remote rule-sets is deprecated in sing-box 1.14.0 and will be removed in sing-box
+1.16.0". The generated `route.rule_set` entries carry no download detour; an upgrade to 1.16 has to
+add one or remote sets stop being fetched.

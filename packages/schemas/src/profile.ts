@@ -742,6 +742,19 @@ export const RuleSet = Type.Object(
      * be a policy nobody chose.
      */
     updateIntervalHours: Type.Optional(Type.Integer({ minimum: 1, maximum: 720 })),
+    /**
+     * What the set matches on, as the owner knows it from where he got it.
+     *
+     * Read for one decision: whether a rule sending this set `direct` also sends the *names* in it to
+     * the direct resolver. Only a set of domains can. A set of addresses in a DNS rule is matched
+     * against the answer, so every query would first be asked of the direct resolver — the uplink's,
+     * in clear — and only then judged. sing-box 1.14.0 also refuses to start on an address-only set
+     * in a DNS rule once any 1.14 DNS feature is in use (its migration notes, "Migrate address filter
+     * fields to response matching"). The contents of a remote set are not known until the core has
+     * fetched it, so this cannot be discovered while planning; absent means "not stated", and an
+     * unstated set is never put in a DNS rule.
+     */
+    contents: Type.Optional(Type.Union([Type.Literal('domains'), Type.Literal('addresses')])),
   },
   { additionalProperties: false },
 );

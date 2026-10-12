@@ -566,6 +566,14 @@ function directDnsRules(profile: ProfileDocument): Record<string, unknown>[] {
     if (!('action' in rule) || rule.action.outbound !== 'direct') continue;
     if (rule.kind === 'domain') rules.push({ domain: rule.domains, server: CORE_TAGS.dnsDirect });
     if (rule.kind === 'domainSuffix') rules.push({ domain_suffix: rule.suffixes, server: CORE_TAGS.dnsDirect });
+    if (rule.kind === 'ruleSet') {
+      // Only sets the owner stated hold domains: see `RuleSet.contents` for what an address set
+      // would do here, which is send every query to the direct resolver before judging it.
+      const domainSets = rule.sets.filter((tag) =>
+        profile.routing.ruleSets.some((set) => set.tag === tag && set.contents === 'domains'),
+      );
+      if (domainSets.length > 0) rules.push({ rule_set: domainSets, server: CORE_TAGS.dnsDirect });
+    }
   }
 
   return rules;

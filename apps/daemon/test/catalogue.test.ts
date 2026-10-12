@@ -287,6 +287,30 @@ test('VLESS: "encryption": "none" is the absence of the feature, and the core ca
   assert.equal(established.carrier.kind, 'native');
 });
 
+test('VLESS: TCP disguised as HTTP goes to the external client, with the header in its configuration', () => {
+  // The shape of the bench subscription's two nodes, 2026-10-11: plain TCP with `headerType=http`. A
+  // server expecting the disguise drops a connection made without it, so losing the header is a dead
+  // tunnel, not a cosmetic difference.
+  const { context: ctx } = context({ id: 'relay', name: 'Relay', index: 3 });
+  const config = { ...ORDINARY_VLESS, network: 'tcp' as const, security: 'none' as const, headerType: 'http' as const, host: '203.0.113.7', path: '/' };
+  const plan = planned(CATALOGUE.vless.plan(config, ctx));
+
+  assert.equal(plan.carrier?.kind, 'external');
+  assert.match(plan.carrier?.reason ?? '', /HTTP/);
+  const clientConfig = plan.files.find((file) => file.path === `${PATHS.socksDir}/relay.json`);
+  assert.ok(clientConfig);
+  const stream = JSON.parse(clientConfig.content).outbounds[0].streamSettings;
+  assert.deepEqual(stream.tcpSettings, {
+    header: { type: 'http', request: { path: ['/'], headers: { Host: ['203.0.113.7'] } } },
+  });
+});
+
+test('VLESS: "headerType": "none" is the absence of the disguise, and the core carries it', () => {
+  const established = establishCarrier({ ...ORDINARY_VLESS, headerType: 'none' });
+  assert.ok(established.ok);
+  assert.equal(established.carrier.kind, 'native');
+});
+
 /* ── availability ────────────────────────────────────────────────────────────────────────── */
 
 test('an unknown core schema offers everything rather than refusing', () => {

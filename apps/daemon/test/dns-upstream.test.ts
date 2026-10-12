@@ -64,3 +64,31 @@ test('"auto" still follows the uplink, and a tunnel\'s own resolver is left on U
   // is not promised to answer TCP. Changing it would be a guess.
   assert.equal(byTag(list, tunnelDnsTag('corp'))?.type, 'udp');
 });
+
+test('a direct rule over a set stated to hold domains resolves those names directly, and no other set does', () => {
+  const base = emptyProfile({ name: 'Bench' }) as unknown as ProfileDocument;
+  const profile = {
+    ...base,
+    routing: {
+      rules: [
+        { kind: 'ruleSet', sets: ['names', 'addresses', 'unstated'], action: { outbound: 'direct' } },
+        { kind: 'ruleSet', sets: ['addresses'], action: { outbound: 'direct' } },
+      ],
+      ruleSets: [
+        { tag: 'names', type: 'remote', url: 'https://example.invalid/n.srs', contents: 'domains' },
+        { tag: 'addresses', type: 'remote', url: 'https://example.invalid/a.srs', contents: 'addresses' },
+        { tag: 'unstated', type: 'remote', url: 'https://example.invalid/u.srs' },
+      ],
+    },
+  } as unknown as ProfileDocument;
+  const config = generateCoreConfig({
+    profile,
+    interfaces: { accessPoint: 'wlan0', uplinks: new Map([['uplink', 'wfwan0']]) },
+    emitted: new Map(),
+    tunnelDns: new Map(),
+    uplinkNetworks: ['192.168.77.0/24'],
+  }) as unknown as { dns: { rules: Record<string, unknown>[] } };
+  const withSets = config.dns.rules.filter((rule) => 'rule_set' in rule);
+  // An address set here would put every query in front of the direct resolver first.
+  assert.deepEqual(withSets, [{ rule_set: ['names'], server: CORE_TAGS.dnsDirect }]);
+});

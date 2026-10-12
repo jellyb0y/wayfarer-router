@@ -408,6 +408,11 @@ const vless: SubscriptionParser = {
     put(config, 'path', url.searchParams.get('path'));
     put(config, 'host', url.searchParams.get('host'));
 
+    // `none` is the default spelled out and is left off, like `encryption: none` above. `http` is kept,
+    // because a server that expects the disguise drops a connection made without it.
+    const headerType = url.searchParams.get('headerType');
+    if (headerType === 'http' && config['network'] === 'tcp') config['headerType'] = 'http';
+
     const alpn = url.searchParams.get('alpn');
     if (alpn !== null && alpn !== '') {
       config['alpn'] = alpn.split(',').map((entry) => entry.trim()).filter((entry) => entry !== '');

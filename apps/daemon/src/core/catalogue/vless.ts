@@ -79,6 +79,10 @@ const EXTERNAL_ONLY_FIELDS: ReadonlyMap<string, string> = new Map([
     'the link carries an encryption parameter, and the proxy core defines no encryption field on a ' +
       'VLESS account — it rejects it outright',
   ],
+  [
+    'headerType',
+    'the link disguises TCP as HTTP, and the proxy core has no such disguise for a plain TCP transport',
+  ],
 ]);
 
 /** Which keys of this configuration actually carry something. */
@@ -107,6 +111,7 @@ export function establishCarrier(
 
     // `encryption: "none"` is the absence of the feature spelled out, and the core carries it.
     if (field === 'encryption' && config.encryption === 'none') continue;
+    if (field === 'headerType' && config.headerType === 'none') continue;
     external.push(reason);
   }
 
@@ -220,6 +225,17 @@ function xrayConfig(config: VlessConfig, port: number): string {
       ...(config.fingerprint === undefined ? {} : { fingerprint: config.fingerprint }),
       ...(config.realityPublicKey === undefined ? {} : { publicKey: config.realityPublicKey }),
       ...(config.realityShortId === undefined ? {} : { shortId: config.realityShortId }),
+    };
+  }
+  if (config.network === 'tcp' && config.headerType === 'http') {
+    streamSettings['tcpSettings'] = {
+      header: {
+        type: 'http',
+        request: {
+          path: [config.path ?? '/'],
+          ...(config.host === undefined ? {} : { headers: { Host: [config.host] } }),
+        },
+      },
     };
   }
   if (config.network === 'ws') {

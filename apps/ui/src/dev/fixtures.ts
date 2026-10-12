@@ -607,6 +607,7 @@ export function extremeProfileDocument(): Record<string, unknown> {
           fingerprint: 'chrome',
           alpn: ['h2', 'http/1.1'],
           host: LONGEST_DOMAIN,
+          headerType: reality ? undefined : 'http',
           // Key material, and the field that decides which client carries this tunnel — never asked
           // about here, and 1.6 KiB of it on the bench board.
           encryption: { $set: true },

@@ -330,6 +330,11 @@ const SET_TYPES = [
   { value: 'local', title: 'A file here' },
 ] as const;
 
+const SET_CONTENTS = [
+  { value: 'domains', title: 'Domains' },
+  { value: 'addresses', title: 'Addresses' },
+] as const;
+
 const SET_FORMATS = [
   { value: 'binary', title: 'Compiled' },
   { value: 'source', title: 'Plain text' },
@@ -522,6 +527,14 @@ function RuleSetList({ document }: { document: Record<string, unknown> }): React
                   value={set['format']}
                   options={SET_FORMATS}
                   absent={{ title: t('routing.setFormatAbsent'), write: undefined }}
+                />
+                <SelectField
+                  pointer={`/routing/ruleSets/${index}/contents`}
+                  label={t('routing.setContents')}
+                  value={set['contents']}
+                  options={SET_CONTENTS}
+                  absent={{ title: t('routing.setContentsAbsent'), write: undefined }}
+                  help={t('routing.setContentsHelp')}
                 />
               </Fold>
             </li>

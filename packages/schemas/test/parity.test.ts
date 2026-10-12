@@ -558,8 +558,16 @@ test('an exempting mark removes a position from the required set and an unmarked
      * 122 → 121 on 2026-09-24 (plan row G30): `/tunnels/-/probe/endpoints` left the schema. A tunnel's
      * liveness is asked of its protocol, and a person is no longer given a control that points it at
      * something the tunnel carries.
+     *
+     * 121 → 122 on 2026-10-11: `/tunnels/-/config/headerType` (VLESS) joined. A subscription link's
+     * `headerType=http` was dropped at the parse, and a server expecting the disguise refuses every
+     * connection made without it; a person adding a link by hand has to be able to set it too.
+     *
+     * 122 → 123 on 2026-10-12: `/routing/ruleSets/-/contents` joined. Whether a set holds domains decides
+     * whether a direct rule over it also resolves its names directly, and only the owner knows what a
+     * remote set holds before the core has fetched it.
      */
-    { person: 121, generated: 7, device: 4, subscription: 2, catalogue: 1 },
+    { person: 123, generated: 7, device: 4, subscription: 2, catalogue: 1 },
     'the source distribution changed. That is not necessarily wrong, but it is never incidental: ' +
       'every entry here is a decision about whether a person must be given a control. Re-derive it ' +
       'and say in the diff which field moved and why.',

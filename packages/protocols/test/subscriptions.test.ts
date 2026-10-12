@@ -125,6 +125,17 @@ test('a link carrying post-quantum encryption keeps it, because it is what decid
   assert.equal(vlessOf(node).encryption, 'mlkem768x25519plus.native.0rtt.abc');
 });
 
+test('a TCP link disguised as HTTP keeps the disguise, because the server drops a connection without it', () => {
+  const node = parseSubscription(
+    'vless://11111111-2222-3333-4444-555555555555@203.0.113.7:8080?headerType=http&host=203.0.113.7&path=%2F&security=none&type=tcp#H',
+  ).nodes[0]!;
+  assert.equal(vlessOf(node).headerType, 'http');
+  const plain = parseSubscription(
+    'vless://11111111-2222-3333-4444-555555555555@203.0.113.7:8080?headerType=none&security=none&type=tcp#P',
+  ).nodes[0]!;
+  assert.equal(vlessOf(plain).headerType, undefined);
+});
+
 /* ── a draft nothing can store is the defect this file was rewritten to remove ───────────── */
 
 test('a parsed draft is checked against the catalogue entry that will have to store it', () => {

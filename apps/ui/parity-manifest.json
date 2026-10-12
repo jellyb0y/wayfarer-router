@@ -207,6 +207,10 @@
       "screen": "routing"
     },
     {
+      "pointer": "/routing/ruleSets/-/contents",
+      "screen": "routing"
+    },
+    {
       "pointer": "/routing/ruleSets/-/format",
       "screen": "routing"
     },
@@ -336,6 +340,10 @@
     },
     {
       "pointer": "/tunnels/-/config/flow",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/headerType",
       "screen": "tunnels"
     },
     {

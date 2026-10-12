@@ -41,6 +41,11 @@ const SECURITY = [
   { value: 'reality', title: 'Reality' },
 ] as const;
 
+const HEADER_TYPE = [
+  { value: 'none', title: 'None' },
+  { value: 'http', title: 'Disguised as HTTP' },
+] as const;
+
 export function VlessEditor({ index, tunnel }: { index: number; tunnel: Tunnel }): ReactElement {
   const config = (tunnel['config'] as Record<string, unknown>) ?? {};
   const base = `/tunnels/${index}/config`;
@@ -124,6 +129,13 @@ export function VlessEditor({ index, tunnel }: { index: number; tunnel: Tunnel }
           label="Host header"
           value={config['host']}
           help="Only when it differs from the handshake name."
+        />
+        <SelectField
+          pointer={`${base}/headerType`}
+          label="TCP header"
+          value={String(config['headerType'] ?? 'none')}
+          options={HEADER_TYPE}
+          help="The link's headerType. A server that expects the HTTP disguise drops connections without it."
         />
         {/*
           * Asked for as what it is — a parameter the link carried — and never as what it causes. It
