@@ -6310,3 +6310,15 @@ The path works; the session does not. It stops at exactly the point the obfuscat
 route and a different exit country — so the cause is not the network path. The client certificate in the
 profile is valid until 2028-12-04. Not established: whether the server refuses this client certificate,
 for example because the same certificate is in use elsewhere at the same time. Recorded as open.
+
+**Resolved the same day, and the assumption above was wrong.** The cause was the client certificate:
+the profile used had a certificate issued 2026-09-01; the owner's working profile carried one issued
+2026-09-29 for the same CN, the same private key, the same CA and the same `tls-crypt` key — a reissue.
+With the reissued profile, through the same path (`via: failover`), at 11:08:52: `Peer Connection
+Initiated with 54.251.200.170:61194`, `Initialization Sequence Completed`, `wfvpnclv` at 10.250.0.5/24.
+The core's connection list showed the session as UDP to 54.251.200.170:61194 with chain
+`wf-selector → germany`. Names under `collectibles.internal` resolved through the access point's
+resolver to 10.20.x addresses, and `https://api.dev.collectibles.internal/health/ready` answered 200 in
+1.2 s over `wfvpnclv`. The guess that the certificate was in use elsewhere at the same time was not the
+reason; a server that silently stops after the client's certificate is also what a superseded
+certificate looks like, and comparing the certificate blocks of two profiles is the quicker check.
