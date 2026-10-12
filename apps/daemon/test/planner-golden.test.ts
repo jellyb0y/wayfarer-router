@@ -559,6 +559,24 @@ function render(scenario: (typeof SCENARIOS)[number]): string {
   });
 }
 
+/*
+ * The same tunnels with the first plain OpenVPN tunnel connecting through the selected alternative. What
+ * it pins: the claimed port, the `socks-proxy` line, the core's loopback listener and its rule ahead of
+ * every other, and the drop-in ordering the client after the core.
+ */
+{
+  const everything = SCENARIOS.find((scenario) => scenario.name === 'tunnels-kill-switch-off');
+  if (everything === undefined) throw new Error('the kill-switch-off scenario is missing');
+  let marked = false;
+  const tunnels = everything.profile.tunnels.map((tunnel) => {
+    if (marked || tunnel.protocol !== 'openvpn' || tunnel.role !== 'resource') return tunnel;
+    marked = true;
+    return { ...tunnel, config: { ...tunnel.config, via: 'failover' } } as typeof tunnel;
+  });
+  if (!marked) throw new Error('the scenario has no plain OpenVPN resource tunnel to route through the selection');
+  SCENARIOS.push({ ...everything, name: 'openvpn-via-failover', profile: { ...everything.profile, tunnels } });
+}
+
 for (const scenario of SCENARIOS) {
   test(`golden: ${scenario.name}`, () => {
     const rendered = render(scenario);

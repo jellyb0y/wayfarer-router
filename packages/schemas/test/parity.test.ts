@@ -566,8 +566,12 @@ test('an exempting mark removes a position from the required set and an unmarked
      * 122 → 123 on 2026-10-12: `/routing/ruleSets/-/contents` joined. Whether a set holds domains decides
      * whether a direct rule over it also resolves its names directly, and only the owner knows what a
      * remote set holds before the core has fetched it.
+     *
+     * 123 → 124 on 2026-10-12: `/tunnels/-/config/via` (plain OpenVPN) joined. A server reachable only
+     * from abroad needs the tunnel's own connection to go through another tunnel, and the owner chooses
+     * which.
      */
-    { person: 123, generated: 7, device: 4, subscription: 2, catalogue: 1 },
+    { person: 124, generated: 7, device: 4, subscription: 2, catalogue: 1 },
     'the source distribution changed. That is not necessarily wrong, but it is never incidental: ' +
       'every entry here is a decision about whether a person must be given a control. Re-derive it ' +
       'and say in the diff which field moved and why.',

@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
 import { createValidatorCache } from '@wayfarer/protocols';
-import { emptyProfile, type ProfileDocument } from '@wayfarer/schemas';
+import { emptyProfile, FALL_THROUGH_DNS, type ProfileDocument } from '@wayfarer/schemas';
 import { emitTunnels, validateTunnelConfigs } from '../src/core/emit.ts';
 import { PATHS } from '../src/core/desired-state.ts';
 import type { CoreCapabilities } from '../src/core/catalogue/index.ts';
@@ -274,4 +274,25 @@ test('a stored configuration validates although its secrets are still wrapped', 
   // The canonical schema describes the *resolved* form. Validating the stored shape against it
   // without unwrapping would report every credential in the profile as the wrong type.
   assert.deepEqual(issues, []);
+});
+
+test('the fall-through resolver\'s fixed port is never handed to a tunnel, however many claim one', () => {
+  // 10853 sits inside the allocation range and is opened by the core itself (`FALL_THROUGH_DNS`); with
+  // enough entry points it was the next free number.
+  // Four tunnels of fifteen entry points: an entry point list holds at most sixteen.
+  const tunnels = Array.from({ length: 4 }, (_, tunnel) => ({
+    ...cloakTunnel(
+      Array.from({ length: 15 }, (_, index) => entryPoint(`site-${String(index)}`, `s${String(index)}.example.net`, 443)),
+    ),
+    id: `hq${String(tunnel)}`,
+    config: {
+      ...(cloakTunnel([]).config as Record<string, unknown>),
+      interfaceSuffix: `hq${String(tunnel)}`,
+      entryPoints: Array.from({ length: 15 }, (_, index) => entryPoint(`site-${String(index)}`, `s${String(index)}.example.net`, 443)),
+    },
+  }));
+  const result = emit(tunnels);
+  assert.equal(result.refusals.length, 0, JSON.stringify(result.refusals));
+  assert.equal(result.ports.length, 60);
+  assert.ok(!result.ports.some((claim) => claim.port === FALL_THROUGH_DNS.port));
 });

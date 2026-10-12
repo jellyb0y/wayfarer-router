@@ -105,8 +105,28 @@ const OpenVpnFields = {
  * direction that fails loudly. A field belonging to the catalogue rather than the owner does not
  * belong in this file at all.
  */
+/** The value of `OpenVpnConfig.via` that means "through whichever alternative is selected". */
+export const VIA_FAILOVER = 'failover';
+
 export const OpenVpnConfig = Source('person', Type.Object(
-  { ...OpenVpnFields },
+  {
+    ...OpenVpnFields,
+    /**
+     * What this tunnel's own connection to its server goes through. Absent: straight out of the uplink,
+     * as before. `failover`: through whichever alternative the device has selected, following it when the
+     * selection moves. A tunnel id: through that tunnel only.
+     *
+     * Asked for on 2026-10-12: a server reachable from abroad and not from the uplink's network, and the
+     * owner had confirmed by hand that the same profile connects when its traffic leaves elsewhere. The
+     * device's own traffic otherwise always takes the main table (the 8000 bypass), so without this field
+     * there was no way to say it.
+     *
+     * One string rather than an object so a single select can write it; `failover` is reserved as a
+     * tunnel id for that reason. Not on `Cloak + OpenVPN`: there the server is a local obfuscation
+     * client whose own connection is what would have to move, and it has no proxy setting.
+     */
+    via: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  },
   { additionalProperties: false, $id: 'OpenVpnConfig' },
 ));
 export type OpenVpnConfig = Static<typeof OpenVpnConfig>;

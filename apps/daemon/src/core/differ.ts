@@ -854,7 +854,11 @@ export function diff(input: DiffInput): Plan2 {
       desired.units.some(
         (other) => other.name !== unit.name && instanceOf(other.name) === unit.name && !realityUnits.get(other.name)?.known,
       );
-    if (unit.content !== undefined && (definitionWritten || unreadNonTemplate || unreadInstanceOfTemplate)) {
+    // A drop-in is part of the definition too, and the only part an instance of a template has of its
+    // own (`wf-openvpn@<id>.service.d/`): written without a reload, the restart that follows would run
+    // the ordering systemd still had in memory.
+    const dropInWritten = [...changedFiles].some((path) => path.startsWith(`${PATHS.unitDir}/${unit.name}.d/`));
+    if ((unit.content !== undefined && (definitionWritten || unreadNonTemplate || unreadInstanceOfTemplate)) || dropInWritten) {
       unitChanges.push({ name: unit.name, action: 'install', purpose: unit.purpose, blastRadius: unitClass });
     }
 

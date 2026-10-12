@@ -10,8 +10,8 @@
  * authoritative and nothing here says they are: the catalogue entry writes those.
  */
 import type { ReactElement } from 'react';
-import { useDraft } from '../../lib/draft.ts';
-import { Field, Fold, SecretField, TextField } from '../ui/index.tsx';
+import { readAt, useDraft } from '../../lib/draft.ts';
+import { Field, Fold, SecretField, SelectField, TextField } from '../ui/index.tsx';
 import type { Tunnel } from './common.tsx';
 
 /**
@@ -79,6 +79,38 @@ export function OpenVpnFileFields({
   );
 }
 
+/**
+ * Plain OpenVPN only: what this tunnel's own connection to its server goes through.
+ *
+ * Not in `OpenVpnFileFields`, which `Cloak + OpenVPN` shares: there the server is a local obfuscation
+ * client, and it has no proxy setting for the daemon to use (see `OpenVpnConfig.via` in the schema).
+ * The list is the other enabled tunnels of the draft, so a tunnel added a moment ago is offered before
+ * it is saved; the daemon refuses a disabled one, itself, or a loop, on the field.
+ */
+function ConnectVia({ index, tunnel }: { index: number; tunnel: Tunnel }): ReactElement {
+  const document = useDraft((state) => state.draft);
+  const tunnels = (readAt(document, '/tunnels') as Tunnel[] | undefined) ?? [];
+  const config = (tunnel['config'] as Record<string, unknown>) ?? {};
+  const others = tunnels
+    .filter((other) => other['id'] !== tunnel['id'] && other['enabled'] !== false)
+    .map((other) => ({ value: String(other['id']), title: `Through ${String(other['name'] ?? other['id'])}` }));
+  return (
+    <SelectField
+      pointer={`/tunnels/${index}/config/via`}
+      label="Connect"
+      value={config['via']}
+      options={[{ value: 'failover', title: 'Through the active tunnel' }, ...others]}
+      absent={{ title: 'Directly', write: undefined }}
+      help="For a server that cannot be reached from here. Through the active tunnel, it moves with failover and reconnects through the new one."
+    />
+  );
+}
+
 export function OpenVpnEditor({ index, tunnel }: { index: number; tunnel: Tunnel }): ReactElement {
-  return <OpenVpnFileFields index={index} config={(tunnel['config'] as Record<string, unknown>) ?? {}} />;
+  return (
+    <>
+      <OpenVpnFileFields index={index} config={(tunnel['config'] as Record<string, unknown>) ?? {}} />
+      <ConnectVia index={index} tunnel={tunnel} />
+    </>
+  );
 }

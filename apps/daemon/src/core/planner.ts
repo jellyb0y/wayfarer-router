@@ -43,7 +43,7 @@ import { DEVICE_TUN_ADDRESS, isStoredSecret } from '@wayfarer/schemas';
 // Type-only, and circular with `emit.ts` on purpose: the emission shape is the planner's contract
 // and the refusal shape is the catalogue's, so each names the other rather than a third module
 // existing only to hold two interfaces apart.
-import type { CarrierChoice, CoreCapabilities } from './catalogue/index.ts';
+import type { CarrierChoice, CoreCapabilities, CoreInboundClaim } from './catalogue/index.ts';
 import type { TunnelRefusal } from './emit.ts';
 
 export interface PlannerInput {
@@ -139,6 +139,8 @@ export interface TunnelEmission {
   units?: { name: string; enabled: boolean; active: boolean; purpose: string }[];
   interfaces?: string[];
   dnsServer?: { address: string; viaInterface: string; domainSuffix?: string[] };
+  /** A listener the core opens for this tunnel's own connection. See `CoreInboundClaim`. */
+  coreInbound?: CoreInboundClaim;
 }
 
 export interface Plan {
@@ -564,7 +566,14 @@ export function plan(input: PlannerInput): Plan {
     profile,
     interfaces: { accessPoint: lanInterface, uplinks: uplinkInterfaces },
     emitted: new Map(
-      [...input.emissions.entries()].map(([id, emission]) => [id, { target: emission.target, object: emission.object }]),
+      [...input.emissions.entries()].map(([id, emission]) => [
+        id,
+        {
+          target: emission.target,
+          object: emission.object,
+          ...(emission.coreInbound === undefined ? {} : { coreInbound: emission.coreInbound }),
+        },
+      ]),
     ),
     tunnelDns,
     /**

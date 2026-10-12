@@ -21,7 +21,7 @@
  * configuration they actually need.
  */
 
-import type { ProfileDocument } from '@wayfarer/schemas';
+import { VIA_FAILOVER, type ProfileDocument } from '@wayfarer/schemas';
 import type { Inventory, RadioInventory } from '../inventory/index.ts';
 import type { Resolution } from './binding.ts';
 import { bandCapabilities } from './radio-capabilities.ts';
@@ -122,6 +122,7 @@ export function checkInvariants(input: InvariantInput): Finding[] {
     ...checkResourceTunnelReach(input),
     ...checkTunnelResourceOrder(input),
     ...checkLeakPolicy(input),
+    ...checkTunnelVia(input),
   ];
 }
 
@@ -954,6 +955,84 @@ function checkRegulatory({ profile, inventory, bindings }: InvariantInput): Find
   return findings;
 }
 
+/* ── a tunnel connecting through another ─────────────────────────────────────────────────── */
+
+/**
+ * `config.via` on an OpenVPN tunnel names what its own connection goes through. Each refusal here is a
+ * configuration that would otherwise start and carry nothing, silently: a target the core has no
+ * outbound for, a tunnel waiting on itself, or the selection carrying the connection that is one of its
+ * own members.
+ */
+function checkTunnelVia({ profile }: InvariantInput): Finding[] {
+  const findings: Finding[] = [];
+  const byId = new Map(profile.tunnels.map((tunnel) => [tunnel.id, tunnel]));
+  const viaOf = (tunnel: { protocol: string; config: unknown }): string | undefined =>
+    tunnel.protocol === 'openvpn' ? (tunnel.config as { via?: string }).via : undefined;
+
+  profile.tunnels.forEach((tunnel, index) => {
+    const via = viaOf(tunnel);
+    if (via === undefined || !tunnel.enabled) return;
+    const pointer = `/tunnels/${index}/config/via`;
+
+    if (via === VIA_FAILOVER) {
+      if (tunnel.role === 'alternative' && !profile.policy.excluded.includes(tunnel.id)) {
+        findings.push({
+          severity: 'error',
+          code: 'tunnel_via_itself',
+          message: `"${tunnel.name}" connects through the selected alternative, and is itself one of them: selected, it would carry its own connection.`,
+          pointer,
+          hint: 'Make it a resource tunnel, exclude it from failover, or name a specific tunnel to go through.',
+        });
+      }
+      return;
+    }
+
+    const target = byId.get(via);
+    if (target === undefined || via === tunnel.id) {
+      findings.push({
+        severity: 'error',
+        code: 'tunnel_via_unknown',
+        message:
+          via === tunnel.id
+            ? `"${tunnel.name}" is set to connect through itself.`
+            : `"${tunnel.name}" connects through "${via}", which is not a tunnel in this profile.`,
+        pointer,
+        hint: `Choose another tunnel, "${VIA_FAILOVER}" for the selected alternative, or remove the setting to connect directly.`,
+      });
+      return;
+    }
+    if (!target.enabled) {
+      findings.push({
+        severity: 'error',
+        code: 'tunnel_via_disabled',
+        message: `"${tunnel.name}" connects through "${target.name}", which is turned off, so it cannot connect at all.`,
+        pointer,
+        hint: `Turn "${target.name}" on, or choose another way for "${tunnel.name}" to connect.`,
+      });
+      return;
+    }
+
+    // Follow the chain; a tunnel met twice is a loop no unit order can start.
+    const path = [tunnel.id];
+    for (let next: string | undefined = via; next !== undefined && next !== VIA_FAILOVER; ) {
+      if (path.includes(next)) {
+        findings.push({
+          severity: 'error',
+          code: 'tunnel_via_loop',
+          message: `Tunnels connect through each other in a circle: ${[...path, next].join(' → ')}.`,
+          pointer,
+          hint: 'Let one of them connect directly or through the selected alternative.',
+        });
+        break;
+      }
+      path.push(next);
+      const step = byId.get(next);
+      next = step === undefined ? undefined : viaOf(step);
+    }
+  });
+  return findings;
+}
+
 /* ── cross references ────────────────────────────────────────────────────────────────────── */
 
 /** Outbound names that are reserved words rather than tunnel ids. */
@@ -981,6 +1060,17 @@ function checkCrossReferences({ profile }: InvariantInput): Finding[] {
     }
     seen.add(tunnel.id);
 
+    // Not a routing target, so not in RESERVED_OUTBOUNDS — a rule naming it would then pass a check the
+    // core would fail. Reserved only as an id, because `config.via` uses the word for "the selection".
+    if (tunnel.id === VIA_FAILOVER) {
+      findings.push({
+        severity: 'error',
+        code: 'reserved_tunnel_id',
+        message: `"${VIA_FAILOVER}" is reserved: a tunnel's "via" uses it to mean the selected alternative.`,
+        pointer: `/tunnels/${index}/id`,
+        hint: 'Rename this tunnel.',
+      });
+    }
     if (RESERVED_OUTBOUNDS.has(tunnel.id)) {
       findings.push({
         severity: 'error',

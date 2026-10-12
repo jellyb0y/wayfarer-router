@@ -407,6 +407,10 @@
       "screen": "tunnels"
     },
     {
+      "pointer": "/tunnels/-/config/via",
+      "screen": "tunnels"
+    },
+    {
       "pointer": "/tunnels/-/dns/domainSuffix",
       "screen": "tunnels"
     },

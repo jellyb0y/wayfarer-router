@@ -72,7 +72,15 @@ export interface CoreConfigInput {
    * Per tunnel: the object to emit and where it goes. Produced by the catalogue entry that owns the
    * protocol, so this generator still never asks what protocol something is.
    */
-  emitted: Map<string, { target: 'outbounds' | 'endpoints'; object: Record<string, unknown> }>;
+  emitted: Map<
+    string,
+    {
+      target: 'outbounds' | 'endpoints';
+      object: Record<string, unknown>;
+      /** A loopback listener this tunnel's own connection enters, sent on to another tunnel. */
+      coreInbound?: { tag: string; port: number; outbound: string };
+    }
+  >;
   /** Resolvers reachable only through a particular tunnel's interface. */
   tunnelDns: Map<string, { address: string; viaInterface: string; domainSuffix: string[] }>;
   /**
@@ -321,6 +329,10 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
     ),
   ];
 
+  const viaInbounds = [...input.emitted.values()].flatMap((emission) =>
+    emission.coreInbound === undefined ? [] : [emission.coreInbound],
+  );
+
   const config: Record<string, unknown> = {
     log: { level: 'warn', timestamp: true },
 
@@ -455,6 +467,9 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
       ...(fallThroughDns.length > 0
         ? [{ type: 'socks', tag: FALL_THROUGH_DNS.inbound, listen: FALL_THROUGH_DNS.listen, listen_port: FALL_THROUGH_DNS.port }]
         : []),
+      // A tunnel connecting through another (`OpenVpnConfig.via`): loopback only, so nothing but this
+      // device can use it as a proxy. SOCKS5 here carries UDP as well, which a UDP OpenVPN profile needs.
+      ...viaInbounds.map((via) => ({ type: 'socks', tag: via.tag, listen: '127.0.0.1', listen_port: via.port })),
     ],
 
     outbounds,
@@ -469,6 +484,9 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
          * is: the inbound exists for that and nothing else, so nothing reaching it can be proxied on.
          */
         ...(fallThroughDns.length > 0 ? [{ inbound: [FALL_THROUGH_DNS.inbound], action: 'hijack-dns' }] : []),
+        // Before every other rule: this traffic is a tunnel's own connection to its server, already
+        // destined for one outbound, and a domain or resource rule must not move it anywhere else.
+        ...viaInbounds.map((via) => ({ inbound: [via.tag], outbound: via.outbound })),
         ...generateRoutingRules(profile, {
           uplinkInterfaces: [...input.interfaces.uplinks.values()],
           uplinkNetworks,

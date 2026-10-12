@@ -1271,3 +1271,52 @@ Every set in use also has its age on the Routing screen, from `GET /api/rule-set
 at request time rather than out of a report up to fifteen minutes old. A screen showing only the bad
 ones could not tell *this list is fine* from *this list was not looked at*, and those must not look
 alike.
+
+## A tunnel that connects through another (2026-10-12)
+
+**The question.** A corporate OpenVPN server that the uplink's network cannot complete a session with,
+while the same profile connects from abroad — the owner confirmed that by hand. On this device a tunnel
+client's own connection always leaves directly: it runs as root, and the 8000 bypass sends root-owned
+traffic to the main table so that tunnels never carry their own transport. There was no way to say
+"dial this server through Germany".
+
+**What it is.** `OpenVpnConfig.via`, plain OpenVPN only:
+
+| `via` | the client's own connection goes |
+|---|---|
+| absent | straight out of the uplink, as before |
+| `failover` | through whichever alternative the core has selected — and through the next one after a failover |
+| a tunnel id | through that tunnel only |
+
+**How.** The core opens a SOCKS listener on `127.0.0.1` for the tunnel (`wf-via-<id>`, a port from the
+same allocator as every other local port) with one route rule, first in the list, sending what arrives
+there to the selector or to the named tunnel's outbound. The client's configuration gets
+`socks-proxy 127.0.0.1 <port>`; OpenVPN 2.6 carries UDP over SOCKS5 UDP ASSOCIATE, and the external VLESS
+client's SOCKS inbound accepts UDP (`udp: true`), so a UDP profile works end to end. Loopback traffic is
+decided by the `local` table at priority 0, so the 8000 bypass does not interfere. The `remote` lines of
+the profile are left alone: the server is the same, only the path to it changes.
+
+**Ordering.** A drop-in for the tunnel's instance (`wf-openvpn@<id>.service.d/50-wayfarer-via.conf`) with
+`After=`, `Wants=` and `PartOf=wf-core.service`. Per instance, because ordering written on a template name
+does not reach its instances. `PartOf`, so a core restart restarts the client at once instead of leaving
+the session to time out on the peer's `ping-restart`. The drop-in is written for every OpenVPN tunnel,
+empty when there is no `via`: managed files that stop being planned are not removed, so a file written
+only with `via` would keep the dependency after it was taken away. A change to it plans an `install`, so
+systemd re-reads the definition before the restart.
+
+**What a failover does to it.** The client's session runs through the selected outbound; when the
+selection moves, that path is gone and the client reconnects through the new one.
+
+**Refused, on the field:** a tunnel that is not there, the tunnel itself, a disabled one (it could not
+connect at all), a loop of tunnels through each other, and `failover` on a tunnel that is itself a
+selectable alternative (selected, it would carry its own connection). `failover` is therefore reserved
+as a tunnel id.
+
+**Why not `Cloak + OpenVPN`.** There the server the client dials is the local obfuscation client, and
+it is that client's connection that would have to move; it has no proxy setting. The field does not
+exist on that entry rather than existing and being ignored.
+
+**Why not policy routing instead.** Routing the server's address into the core for root-owned traffic
+would work for any protocol, but it is the shape of the loop this device already lost a day to — a
+tunnel's transport captured by the tunnel — and it would need the server's address, which a profile can
+give as a name. A listener the client is told about is explicit and has nothing to match.

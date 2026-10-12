@@ -120,6 +120,18 @@ export interface EntryPlan {
   /** Interfaces this tunnel creates, so the planner can reference them before they exist. */
   interfaces: string[];
   carrier?: CarrierChoice;
+  /**
+   * An inbound the proxy core must open for this tunnel: a SOCKS listener on loopback whose traffic the
+   * core sends to `outbound`. How a tunnel's own connection goes through another (`OpenVpnConfig.via`).
+   */
+  coreInbound?: CoreInboundClaim;
+}
+
+export interface CoreInboundClaim {
+  tag: string;
+  port: number;
+  /** An outbound tag: a tunnel id, or the selector for "whichever alternative is selected". */
+  outbound: string;
 }
 
 /**

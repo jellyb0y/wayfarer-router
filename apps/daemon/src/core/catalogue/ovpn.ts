@@ -33,6 +33,11 @@ export interface OvpnFileInput {
    * Now one side decides and the other is generated from it, so they cannot disagree.
    */
   remotes: OvpnRemote[];
+  /**
+   * A local SOCKS port this client's own connection goes through, or absent to dial directly. The
+   * proxy core listens there and sends what arrives on to another tunnel (`OpenVpnConfig.via`).
+   */
+  socksProxyPort?: number;
   /** The unit that will read these files. Named by the caller so the entry owns its unit shape. */
   unit: string;
 }
@@ -92,6 +97,15 @@ function ovpnConfig(input: OvpnFileInput): string {
       '# that order is the failover order and it is data in the profile, not text in this file.',
       ...input.remotes.map((remote) => `# ${remote.note}`),
       ...input.remotes.map((remote) => `remote ${remote.host} ${remote.port}`),
+      '',
+    );
+  }
+
+  if (input.socksProxyPort !== undefined) {
+    lines.push(
+      '# This client reaches its server through another tunnel: the proxy core listens on this port and',
+      '# forwards what arrives to the tunnel the profile names (`via`). UDP travels as SOCKS5 UDP ASSOCIATE.',
+      `socks-proxy 127.0.0.1 ${String(input.socksProxyPort)}`,
       '',
     );
   }

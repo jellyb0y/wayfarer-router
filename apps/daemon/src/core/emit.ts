@@ -29,7 +29,7 @@
  * subset of reality is one that passes on the day it matters.
  */
 
-import { isStoredSecret, isTunnelProtocol, TUNNEL_CONFIGS, type ProfileDocument } from '@wayfarer/schemas';
+import { FALL_THROUGH_DNS, isStoredSecret, isTunnelProtocol, TUNNEL_CONFIGS, type ProfileDocument } from '@wayfarer/schemas';
 import type { JsonSchemaNode, ValidatorCache } from '@wayfarer/protocols';
 import {
   catalogueEntry,
@@ -101,7 +101,9 @@ export function emitTunnels(input: EmitInput): EmitResult {
   const carriers = new Map<string, CarrierChoice>();
   const refusals: TunnelRefusal[] = [];
   const ports: PortClaim[] = [];
-  const taken = new Set(input.allocatedPorts);
+  // The fall-through resolver's listener is a fixed port inside this range (`FALL_THROUGH_DNS`), opened
+  // by the core whenever a tunnel falls through; handed to a tunnel as well, one of the two fails to bind.
+  const taken = new Set([...input.allocatedPorts, FALL_THROUGH_DNS.port]);
 
   const allocatePort = (claim: { owner: string; pointer: string }): number => {
     for (let port = PORT_RANGE.first; port <= PORT_RANGE.last; port += 1) {
@@ -176,6 +178,7 @@ export function emitTunnels(input: EmitInput): EmitResult {
       ...(plan.files.length > 0 ? { files: plan.files } : {}),
       ...(plan.units.length > 0 ? { units: plan.units } : {}),
       ...(plan.interfaces.length > 0 ? { interfaces: plan.interfaces } : {}),
+      ...(plan.coreInbound === undefined ? {} : { coreInbound: plan.coreInbound }),
     });
     if (plan.carrier !== undefined) carriers.set(tunnel.id, plan.carrier);
   });

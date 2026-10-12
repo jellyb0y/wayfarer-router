@@ -122,6 +122,46 @@ test('OpenVPN: the profile’s own remotes stand, and the interface name is gene
   assert.match(conf.content, /^remote vpn\.example\.invalid 1194$/m);
 });
 
+test('OpenVPN through the selected alternative: a claimed port, a socks-proxy line, the core inbound, and a drop-in tying it to the core', () => {
+  const { context: ctx, claims } = context({ id: 'collect', name: 'Collectibles', index: 3 });
+  const plan = planned(
+    CATALOGUE.openvpn.plan({ profile: 'client\nproto udp\nremote 203.0.113.9 61194\n', interfaceSuffix: 'clv', via: 'failover' }, ctx),
+  );
+
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0]?.pointer, '/tunnels/3/config/via');
+  assert.deepEqual(plan.coreInbound, { tag: 'wf-via-collect', port: claims[0]?.port, outbound: 'wf-selector' });
+
+  const conf = plan.files.find((file) => file.path.endsWith('collect.conf'));
+  assert.match(conf?.content ?? '', new RegExp(`^socks-proxy 127\\.0\\.0\\.1 ${String(claims[0]?.port)}$`, 'm'));
+  // The profile's own server is still the one dialled; only the path to it changes.
+  assert.match(conf?.content ?? '', /^remote 203\.0\.113\.9 61194$/m);
+
+  const dropIn = plan.files.find((file) => file.path === `${PATHS.unitDir}/wf-openvpn@collect.service.d/50-wayfarer-via.conf`);
+  assert.ok(dropIn);
+  for (const line of ['After=wf-core.service', 'Wants=wf-core.service', 'PartOf=wf-core.service']) {
+    assert.match(dropIn.content, new RegExp(`^${line}$`, 'm'));
+  }
+});
+
+test('OpenVPN through a named tunnel sends the core inbound to that tunnel\'s outbound', () => {
+  const { context: ctx } = context({ id: 'collect', name: 'Collectibles', index: 0 });
+  const plan = planned(CATALOGUE.openvpn.plan({ profile: 'client\n', via: 'germany' }, ctx));
+  assert.equal(plan.coreInbound?.outbound, 'germany');
+});
+
+test('OpenVPN connecting directly: no port, no socks-proxy, and a drop-in that ties it to nothing', () => {
+  const { context: ctx, claims } = context({ id: 'hq', name: 'HQ', index: 0 });
+  const plan = planned(CATALOGUE.openvpn.plan({ profile: 'client\n' }, ctx));
+  assert.deepEqual(claims, []);
+  assert.equal(plan.coreInbound, undefined);
+  assert.doesNotMatch(plan.files.find((file) => file.path.endsWith('hq.conf'))?.content ?? '', /socks-proxy/);
+  // Written anyway, so taking `via` away changes this file rather than leaving the dependency behind.
+  const dropIn = plan.files.find((file) => file.path.endsWith('.service.d/50-wayfarer-via.conf'));
+  assert.ok(dropIn);
+  assert.doesNotMatch(dropIn.content, /^(After|Wants|PartOf)=/m);
+});
+
 /* ── Cloak + OpenVPN ─────────────────────────────────────────────────────────────────────── */
 
 function entryPoint(id: string, host: string, serverName: string) {

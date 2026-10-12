@@ -6292,3 +6292,21 @@ those numbers. `sing-box check` on the board accepted the two fields, 2026-10-12
   eleven rules were present, and the event log held no `policy-rules.reinstated` — the rules were never
   missing. Monotonic order on that boot: `wf-firewall` finished 10.93 s, networkd started 13.39 s,
   `wf-core` started 107.07 s — the same order that lost the rules on two boots before the drop-in.
+
+## A tunnel through another, on the board (2026-10-12)
+
+Deployed, and "Collectibles · via VPN" added through the API: plain OpenVPN, the provider's `.ovpn` with its
+`remote 127.0.0.1 61195` line removed (a local obfuscation client on the owner's laptop), `via: failover`.
+The apply wrote the drop-in, planned `install` (daemon-reload), and started the client. Its log, 11:04:40:
+
+- `Attempting to establish TCP connection with 127.0.0.1:10802` → `established`;
+  `SOCKS proxy wants us to send UDP to 127.0.0.1:33371` — the core's listener took UDP ASSOCIATE;
+- `UDPv4 link remote: 54.251.200.170:61194`, `TLS: Initial packet from 54.251.200.170:61194`,
+  `VERIFY OK: depth=0, CN=server` — the server answered through the selected alternative;
+- then nothing until `TLS key negotiation failed to occur within 60 seconds` at 11:05:41.
+
+The path works; the session does not. It stops at exactly the point the obfuscated path stopped at
+(server certificate verified, no reply after the client's own), on the same day, through a different
+route and a different exit country — so the cause is not the network path. The client certificate in the
+profile is valid until 2028-12-04. Not established: whether the server refuses this client certificate,
+for example because the same certificate is in use elsewhere at the same time. Recorded as open.
