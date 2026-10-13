@@ -249,6 +249,7 @@ function pollingPlatform(calls: ShowCall[], properties: Record<string, Record<st
     host: { uptimeSeconds: async () => 1000 } as unknown as Platform['host'],
     binaries: {} as Platform['binaries'],
     journal: { currentBootId: async () => 'boot' } as unknown as Platform['journal'],
+    http: { fetchText: async () => ({ ok: false as const, reason: 'no network in this test' }) },
     close: () => undefined,
   };
 }

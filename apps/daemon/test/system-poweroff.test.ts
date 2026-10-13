@@ -87,6 +87,7 @@ function fakePlatform(calls: Calls): Platform {
       read: async () => ({ entries: [], nextCursor: null, currentBootId: 'boot', containsEarlierBoots: false, hasMore: false, incomplete: false, incompleteReason: null, skippedLines: 0 }),
       currentBootId: async () => 'boot-7f3a',
     },
+    http: { fetchText: async () => ({ ok: false as const, reason: 'no network in this test' }) },
     close: () => undefined,
   };
 }

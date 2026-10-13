@@ -6322,3 +6322,78 @@ resolver to 10.20.x addresses, and `https://api.dev.collectibles.internal/health
 1.2 s over `wfvpnclv`. The guess that the certificate was in use elsewhere at the same time was not the
 reason; a server that silently stops after the client's certificate is also what a superseded
 certificate looks like, and comparing the certificate blocks of two profiles is the quicker check.
+
+## Subscriptions were never refreshed, and could not have recorded it (2026-10-14)
+
+**Symptom.** On 2026-10-13 the owner asked whether the subscription was being refreshed at all. Read off
+the bench board through `GET /api/profiles/<active>`: neither subscription (`cryptocat`, `refreshHours`
+24; `claude`, 12) had a `lastRefresh`, and the last 400 events held none about a subscription.
+
+**Found.**
+
+* `refreshSubscription` (`core/subscriptions.ts`) was called by its tests and by nothing else; no timer
+  read `refreshHours`. The field had a control in the editor and no effect.
+* Fetched by hand from the board, as root, past the tunnels (`curl` to each URL, 2026-10-13 23:58 MSK):
+  both answered `200`, 2776 and 6240 bytes, in 0.09 s and 0.18 s, and the HTTPS one verified. The
+  `cryptocat` feed no longer offered `vless://82.22.50.101:8080` — the node `france` was built from — and
+  offered `vless://82.21.117.116:8080` instead. The device had been failing over to a node its provider
+  had withdrawn.
+* **Writing `lastRefresh` was impossible.** `/subscriptions/-/lastRefresh/at` is the only `format:
+  'date-time'` in the document, TypeBox throws on a format nobody registered, and nothing registered it:
+  the first test that stamped a refresh failed with `ProfileInvalidError: Unknown format 'date-time'`.
+  The format is now registered in `validate-profile.ts`, beside the only checker of the document.
+* **Every derived tunnel compared as changed.** `refreshSubscription` compared configurations with
+  `JSON.stringify`; a stored one holds secrets as `{"$secret": …}`, a parsed one in clear. Unfixed, every
+  refresh would have reported every tunnel updated and restarted the core for nothing. It now compares
+  with secrets unwrapped and keys sorted.
+* A dry run of the parser against the live feeds and the stored profile, before any of this was deployed:
+  `germany` and `claude` differ in no field, so the first refresh adds two disabled tunnels
+  (`82.21.117.116:8080` from `cryptocat`, `82.22.50.101:51060` from `claude`), keeps `france` because the
+  policy names it, and restarts nothing.
+
+**Decided.** The observer `subscription-refresh` (rules in `docs/04-tunnels-and-protocols.md`, "The
+timer's half"). The fetch is `platform/http.ts`, the only code here that sends a request off the device.
+
+**Why the alternatives lost.**
+
+* *Add new nodes enabled, or put them in the policy.* A provider's feed would then decide what runs and
+  where traffic goes — the thing rule 3 of `refreshSubscription` exists to refuse. A disabled tunnel is
+  visible and costs nothing.
+* *Merge a person's edits into a refreshed configuration.* Keeping a field the feed no longer carries
+  keeps a value the provider withdrew (a `flow`, an `encryption`), and the refresh exists to deliver
+  exactly those changes. Replaced whole; the comment on `VlessConfig` was corrected, since it said
+  nothing refetches these fields.
+* *Stamp `lastRefresh` through `replace`.* That bumps the revision, and safe mode reads a new revision as
+  an operator's edit that ends its count of failures — twice a day, on a timer, with no change of
+  configuration.
+* *Store a refresh that needs a confirmation window and let a person apply it.* A stored, unapplied
+  document is drift, and it would block every later refresh by the unapplied-edits rule. Nothing is
+  stored; the event says what was held.
+
+**Found on the board after the first deploy (2026-10-14 00:16 MSK).**
+
+* `refreshSubscription` returned `[...foreign, ...derived]`, so a refresh **reordered the tunnels**, and
+  the emitter hands out loopback ports in document order. The first `cryptocat` refresh moved `germany`
+  and `france` behind `collect-vpn` and `intra`; its plan replaced their OpenVPN and transport files,
+  classified `network`, and was held. Nothing was applied. The function now keeps every tunnel in place
+  and appends new ones; a test pins the order.
+* The `claude` refresh added one disabled tunnel and its apply still restarted the core (00:16:19):
+  `config.json` and `fence.json` changed because `collect-vpn` was down at that moment (since 21:21 MSK,
+  `TLS key negotiation failed`, before any of this) and `10.250.0.0/24` was in the fence only as "kept
+  while absent" — a retention the resolver follower applies and an ordinary plan does not. Any apply
+  while a tunnel is down drops its network until the follower sees it again. Not changed here; recorded
+  because a refresh is one more apply that meets it.
+
+**Changed the same day, on the owner's decision: a withdrawn node is replaced.** The first version kept
+`france` on its withdrawn node, by the old rule ("re-pointing is a decision"). The owner: the tunnel must
+move on its own. The feed's labels, read on the board: `🇩🇪 Germany · Frankfurt 2` (82.21.117.116) and
+`🇩🇪 Germany · Frankfurt` (5.39.255.51) — **the replacement is a second German node; the feed has no French
+one any more.** Shown to the owner before building; the answer was any free node, same country first, and
+the name taken from the feed. Also changed: `lastRefresh.ok` is now false for a refresh that was held or
+failed to apply, so it is retried in an hour. The first deploy had stamped `cryptocat` `ok: true` with the
+change held by the ordering bug, which would have postponed the retry by a day.
+
+**Not done.** No "refresh now" button or route; the round runs at start-up, so a restart of the daemon is
+the way to force one. The feed's own `Profile-Update-Interval` header (the `claude` feed sends `12`) is
+not read: `refreshHours` is the owner's.
+

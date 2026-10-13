@@ -212,6 +212,22 @@ export interface ProfileStore {
   export(id: string, includeSecrets: boolean): { document: unknown; secretsIncluded: boolean } | null;
   create(document: unknown): ProfileRow;
   replace(id: string, document: unknown): ProfileRow;
+  /**
+   * Writes what this device learned by fetching one subscription — `/subscriptions/i/lastRefresh` and
+   * nothing else — **without** counting as an edit.
+   *
+   * Not `replace`, because `replace` bumps the revision, and the revision is how safe mode tells an
+   * operator's change from the configuration it has been failing to apply. A refresh that only records
+   * "fetched at 04:00, nothing changed" changes no configuration; bumping the revision for it would end
+   * every run of failures safe mode is counting, twice a day, on a timer. Taking the value rather than a
+   * document is what makes "nothing else" true by construction instead of by a caller's care.
+   * Returns `false` when the profile or the subscription is not there any more.
+   */
+  recordSubscriptionRefresh(
+    id: string,
+    subscriptionId: string,
+    lastRefresh: { at: string; ok: boolean; detail: string; nodeCount: number },
+  ): boolean;
   delete(id: string): boolean;
   /** Validates, migrates and stores. Reports which secrets the imported document is missing. */
   import(raw: unknown): { profile: ProfileRow; migratedFrom: number; applied: string[]; missing: { pointer: string; kind: SecretKind }[] };
@@ -509,6 +525,24 @@ export function createProfileStore(
       const row = store.get(id);
       if (row === null) throw new Error(`no profile ${id}`);
       return row;
+    },
+
+    recordSubscriptionRefresh(id, subscriptionId, lastRefresh) {
+      const row = store.get(id);
+      if (row === null) return false;
+      const document = row.document as { subscriptions?: Record<string, unknown>[] };
+      const index = (document.subscriptions ?? []).findIndex((entry) => entry['id'] === subscriptionId);
+      if (index < 0) return false;
+      const next = {
+        ...document,
+        subscriptions: document.subscriptions!.map((entry, at) => (at === index ? { ...entry, lastRefresh } : entry)),
+      };
+      const wrapped = wrapSecrets(next, matchersFor(next)) as Record<string, unknown>;
+      assertProfileDocument(wrapped);
+      // Neither `revision` nor `updated_at`, for the reason the migration write above gives: this is not
+      // a change of configuration. See the declaration for why the revision matters.
+      db.prepare('UPDATE profiles SET document = ? WHERE id = ?').run(JSON.stringify(wrapped), id);
+      return true;
     },
 
     delete(id) {

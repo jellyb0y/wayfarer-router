@@ -100,6 +100,7 @@ function fakePlatform(): Platform {
       }),
       currentBootId: async () => 'boot',
     },
+    http: { fetchText: async () => ({ ok: false as const, reason: 'no network in this test' }) },
     close: () => undefined,
   };
 }

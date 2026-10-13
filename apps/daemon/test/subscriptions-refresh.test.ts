@@ -128,7 +128,8 @@ test('a node the feed dropped is removed when nothing references it', () => {
   assert.equal(result.document.tunnels.some((tunnel) => tunnel.id === 'gone'), false);
 });
 
-test('a node the feed dropped is KEPT when policy names it, and policy is not re-pointed', () => {
+test('a node the feed dropped moves to a free node when policy names it, keeping its id and place', () => {
+  // The bench board on 2026-10-13: the provider withdrew the node behind `france` and offered another.
   const referenced = derived('chosen', 'vless://old.example:443', 'The one they picked');
   const before = documentWith([referenced], { priority: ['chosen'] });
   const result = refreshSubscription({
@@ -138,15 +139,44 @@ test('a node the feed dropped is KEPT when policy names it, and policy is not re
     toTunnel,
   });
 
-  assert.deepEqual(result.keptBecauseReferenced, ['chosen']);
-  assert.ok(result.document.tunnels.some((tunnel) => tunnel.id === 'chosen'), 'the old definition stays');
+  assert.deepEqual(result.repointed, [{ id: 'chosen', from: 'vless://old.example:443', to: 'vless://new.example:443' }]);
+  assert.deepEqual(result.added, [], 'the free node went to the tunnel that needed it, not to a new one');
+  const moved = result.document.tunnels.find((tunnel) => tunnel.id === 'chosen')!;
+  assert.equal((moved.config as { server: string }).server, 'new.example');
+  assert.equal(moved.name, 'A substitute', 'the name says where it now leads');
+  assert.deepEqual(moved.derivedFrom, { subscription: 'feed', node: 'vless://new.example:443' });
+  assert.deepEqual(result.document.policy.priority, ['chosen'], 'the policy follows the id; it is not edited');
+});
+
+test('with no free node, a dropped node policy names is kept as it was', () => {
+  const result = refreshSubscription({
+    document: documentWith([derived('a', 'vless://a.example:443'), derived('b', 'vless://gone.example:443')], { priority: ['a', 'b'] }),
+    subscriptionId: 'feed',
+    nodes: [node('a.example', 443, 'A')],
+    toTunnel,
+  });
+  assert.deepEqual(result.repointed, []);
+  assert.deepEqual(result.keptBecauseReferenced, ['b']);
+  assert.equal((result.document.tunnels.find((tunnel) => tunnel.id === 'b')!.config as { server: string }).server, 'gone.example');
+});
+
+test('a free node of the same country is preferred, and no node is given twice', () => {
+  const result = refreshSubscription({
+    document: documentWith(
+      [derived('fr', 'vless://fr-old.example:443', 'France · Paris'), derived('nl', 'vless://nl-old.example:443', 'Netherlands')],
+      { priority: ['fr', 'nl'] },
+    ),
+    subscriptionId: 'feed',
+    nodes: [node('de.example', 443, '🇩🇪 Germany · Frankfurt'), node('fr.example', 443, '🇫🇷 France · Lyon')],
+    toTunnel,
+  });
   assert.deepEqual(
-    result.document.policy.priority,
-    ['chosen'],
-    'sending traffic somewhere the operator did not choose is worse than a tunnel being down: a tunnel ' +
-      'that is down is visible, one silently re-pointed is not',
+    result.repointed.map((move) => [move.id, move.to]),
+    [
+      ['fr', 'vless://fr.example:443'],
+      ['nl', 'vless://de.example:443'],
+    ],
   );
-  assert.match(result.notes[0]!, /nothing has been re-pointed/);
 });
 
 test('an excluded node counts as referenced: policy names it in either list', () => {
@@ -229,10 +259,8 @@ test('a node a routing rule still names is kept, exactly as a policy reference i
     toTunnel,
   });
 
-  assert.deepEqual(result.keptBecauseReferenced, ['chosen']);
   assert.deepEqual(result.removed, []);
-  assert.ok(result.document.tunnels.some((tunnel) => tunnel.id === 'chosen'), 'the old definition stays');
-  assert.match(result.notes[0]!, /nothing has been re-pointed/);
+  assert.deepEqual(result.repointed.map((move) => move.id), ['chosen'], 'a rule reference protects it exactly as policy does');
 });
 
 test('a reference from any rule kind counts, because the field is what names a tunnel', () => {
@@ -263,4 +291,27 @@ test('a rule naming something else does not protect an unrelated node', () => {
     toTunnel,
   });
   assert.deepEqual(result.removed, ['gone'], 'nothing references it, so it goes');
+});
+
+test('every tunnel keeps its place, and a new node goes at the end', () => {
+  // Order decides loopback ports (`core/emit.ts`); the bench board on 2026-10-14 had derived tunnels
+  // first and hand-authored ones after, and a refresh that moved them moved every port behind them.
+  const byHand: Tunnel = {
+    id: 'hq',
+    name: 'HQ',
+    role: 'alternative', onUnavailable: 'block' as const,
+    enabled: true,
+    protocol: 'openvpn',
+    config: { profile: 'client\ndev tun\n' },
+  };
+  const result = refreshSubscription({
+    document: documentWith([derived('de', 'vless://de.example:443'), derived('fr', 'vless://fr.example:443'), byHand], { priority: ['de', 'fr'] }),
+    subscriptionId: 'feed',
+    nodes: [node('new.example', 443, 'New'), node('de.example', 443, 'DE'), node('spare.example', 443, 'Spare')],
+    toTunnel,
+  });
+  // `fr` lost its node and takes the first free one in its own place; the other free one is appended.
+  assert.deepEqual(result.document.tunnels.map((tunnel) => tunnel.id), ['de', 'fr', 'hq', 'sub-spare-example']);
+  assert.deepEqual(result.repointed.map((move) => move.id), ['fr']);
+  assert.deepEqual(result.updated, []);
 });

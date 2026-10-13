@@ -37,7 +37,7 @@
  */
 
 import { Value } from '@sinclair/typebox/value';
-import type { TSchema } from '@sinclair/typebox';
+import { FormatRegistry, type TSchema } from '@sinclair/typebox';
 import { ProfileDocument, TUNNEL_BRANCHES } from './profile.ts';
 import { TUNNEL_CONFIGS, isTunnelProtocol, tunnelProtocolList, type TunnelProtocol } from './tunnel-configs.ts';
 import { secretMatchers, unwrapForValidation } from './secret-transforms.ts';
@@ -228,6 +228,19 @@ function documentFaults(document: Record<string, unknown>): ProfileFault[] {
 }
 
 /* ── the validator ───────────────────────────────────────────────────────────────────────── */
+
+/*
+ * TypeBox checks a `format` only against what is registered, and **throws** on one that is not — it
+ * does not skip it. `/subscriptions/-/lastRefresh/at` is the one `date-time` in the document, and until
+ * 2026-10-14 nothing registered the format, so every document holding a `lastRefresh` was refused with
+ * `Unknown format 'date-time'`. Nothing had noticed because nothing had ever written one: the refresh
+ * that writes it did not run. Registered here, beside the only checker of the document, so the schema
+ * cannot be checked without it.
+ */
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i;
+if (!FormatRegistry.Has('date-time')) {
+  FormatRegistry.Set('date-time', (value) => RFC3339.test(value) && !Number.isNaN(Date.parse(value)));
+}
 
 function errorsAgainst(schema: TSchema, value: unknown, pointer: string): ProfileFault[] {
   const normalised = unwrapForValidation(value, secretMatchers(schema));

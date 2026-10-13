@@ -332,11 +332,13 @@ Registry, one parser per scheme, a fixture file per real-world variant, and a te
 that every fixture round-trips.
 
 **Refresh is automatic, on a timer.** A provider that moves an endpoint should not
-require the operator to notice. But refreshing must never silently change *which*
-endpoint the policy prefers: if a node referenced by the priority order disappears
-from the subscription, the stored node is kept, the tunnel keeps working, and the
-interface reports that the subscription no longer offers it. Re-pointing the policy
-is a decision, not a side effect of a background fetch. The existing packages in this area are small and
+require the operator to notice. A tunnel in use whose node disappears from the
+subscription moves to a node the subscription still offers and nothing else uses,
+keeping its id and therefore its place in the priority order; the move is recorded
+as an event. The priority order itself is never edited by a refresh. (Until
+2026-10-14 this said the stored node was kept and re-pointing was "a decision, not a
+side effect"; the bench board then spent a day failing over to a node its provider
+had withdrawn, and the owner decided the feed chooses. See "The timer's half" below.) The existing packages in this area are small and
 young; the parsers are worth writing here with tests rather than taking on a
 dependency whose failure mode is a silently mangled endpoint.
 
@@ -426,7 +428,7 @@ refresh, because it is what makes the next one safe.
 test per rule. The rules worth stating:
 
 * **A dropped node is removed only when nothing references it.** A node that disappears from the feed but
-  is named by policy or by a routing rule stays.
+  is named by policy or by a routing rule moves to a free node, or stays if there is none (see below).
 * **Identity is server, port and protocol**, so a rename is an *update* rather than a delete plus an add —
   which would break policy naming the old id.
 * **Policy is never edited**, in either direction. A refresh does not reorder failover priority or add to
@@ -436,6 +438,38 @@ test per rule. The rules worth stating:
   so an unattended refresh would take the device down and put it back, on a timer.
 * **Every refresh is recorded in the event ring**, because it is the one path where the device edits its
   own configuration unasked.
+
+### The timer's half: when a refresh runs, and whether it lands
+
+`core/subscription-refresh.ts` is the observer `subscription-refresh`. Every ten minutes it asks which of
+the active profile's subscriptions are due — `refreshHours` since the last success, or one hour after a
+failure — fetches each, runs `refreshSubscription`, and decides whether the result lands. The refusals,
+each of which exists because nobody is watching:
+
+* **No trusted clock, no round.** Due is a wall-clock comparison and this board has no RTC battery.
+* **A failed fetch or a feed with no runnable node changes no tunnel.** Only `lastRefresh` records it, with
+  a reason built from the status or error code — never the error text, which can carry the URL.
+* **A tunnel in use whose node the feed dropped moves to a free node** of the same feed — one no other
+  tunnel uses, the same country first (flag or first word of the name), otherwise the first. It keeps its
+  id and its place, so the policy and the rules follow it, and takes the node's configuration and name.
+  With no free node it is kept as it was. Decided by the owner on 2026-10-14, replacing "kept, never
+  re-pointed": the feed had withdrawn the node behind `france` and the device went on failing over to it.
+* **Other new nodes arrive with `enabled: false`** and outside the policy. A feed growing does not start a
+  tunnel nothing needs.
+* **`lastRefresh.ok` means the device runs what the feed says**, not that the fetch worked. A refresh that
+  was held or whose apply failed is `ok: false` and is retried after an hour.
+* **A derived tunnel's configuration is the feed's.** Id, name, role, resources and `enabled` stay as a
+  person set them; the configuration is replaced whole. See the corrected note on `VlessConfig`.
+* **Not on top of unapplied edits.** If the active profile differs from the last applied document in
+  anything but `lastRefresh`, the refresh is held: applying it would apply the edit too.
+* **Plan first, store only what may be applied.** A plan above `service` is not stored; the event
+  `subscription.refresh-held` names what it would have changed.
+* **An apply that fails puts the previous document back**, so the stored profile stays what the device runs.
+* **`lastRefresh` is not an edit.** It is written by `recordSubscriptionRefresh`, which leaves the profile
+  revision alone; a change of tunnels goes through `replace` and bumps it.
+
+Events: `subscription.refreshed`, `subscription.fetch-failed`, `subscription.node-withdrawn`,
+`subscription.refresh-held`, `subscription.refresh-failed`.
 
 ### The review finding: deletion followed by refusal
 

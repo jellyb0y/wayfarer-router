@@ -25,6 +25,7 @@ import {
   restoreAside,
   writeAtomic,
 } from './files.ts';
+import { fetchText } from './http.ts';
 import { createJournalReader, type JournalReader } from './journal-reader.ts';
 import { createNetReader, type NetReader } from './net.ts';
 import { createNftController, type NftController } from './nft.ts';
@@ -82,6 +83,8 @@ export interface Platform {
   host: HostReader;
   binaries: BinaryDetector;
   journal: JournalReader;
+  /** Requests that leave the device. See `http.ts` for why its failures never carry the URL. */
+  http: { fetchText: typeof fetchText };
   close(): void;
 }
 
@@ -140,6 +143,7 @@ export function createPlatform(options: PlatformOptions): Platform {
       ...(options.coreBinary ? { coreBinary: options.coreBinary } : {}),
     }),
     journal: createJournalReader(paths.journalctl),
+    http: { fetchText },
     close(): void {
       systemd.close();
       supplicant.close();

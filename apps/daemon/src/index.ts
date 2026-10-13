@@ -53,6 +53,7 @@ import { followDevice } from './core/device-follower.ts';
 import { observeAddresses } from './core/address-watch.ts';
 import { createObserverRegistry } from './core/observers.ts';
 import { watchPolicyRules } from './core/rules-watch.ts';
+import { refreshSubscriptions } from './core/subscription-refresh.ts';
 import { observeCapturedResolvers } from './core/resolver-watch.ts';
 import { listenForTransactionsEndedElsewhere } from './core/transaction-ended.ts';
 import { readStamp } from './core/credential-expiry.ts';
@@ -632,6 +633,20 @@ async function main(): Promise<void> {
     record: (event) => store.recordEvent(event),
   });
 
+  /*
+   * The active profile's subscriptions, refreshed on their own `refreshHours`. See
+   * `core/subscription-refresh.ts` for what an unattended refresh may and may not change.
+   */
+  const subscriptionRefresh = refreshSubscriptions({
+    store,
+    profiles,
+    applyDeps,
+    observers,
+    fetchText: async (url) => await platform.http.fetchText(url),
+    clockSynchronized: async () => (await platform.clock.status()).synchronized,
+    record: (event) => store.recordEvent(event),
+  });
+
   const resolverWatch = observeCapturedResolvers({
     observers,
     onCapture: () => void resolverFollower.check('capture-changed'),
@@ -1052,6 +1067,7 @@ async function main(): Promise<void> {
     // leaves them is a process that will not exit when something else holds a handle too.
     resolverWatch.stop();
     rulesWatch.stop();
+    subscriptionRefresh.stop();
     stopListeningForEnds();
     await stopTelemetry();
     listeners.stopAll();
