@@ -6444,3 +6444,21 @@ invariants and the generated selectors, read from the database read-only):
   person could still edit one of them.
 * *A group-of-groups egress list.* The owner asked for no fixed list; one egress, and a group inside it, is
   the whole of what was asked.
+
+**Applied on the board, 2026-10-14 02:14 MSK, and what the confirmation window showed.** The apply was
+`network` (the person's tunnels now take the first loopback ports, so `intra`'s transports and
+`collect-vpn` were rewritten once; the core restarted). Inside the window: `wf-selector` on `cryptocat`,
+`cryptocat` on `germany`, `claude.ai` answering through the egress in 170 ms and through the `claude` group
+in 684 ms, `intra` up with its resolver answering in 3 ms. The `claude` group had already moved itself off
+`claude-1` to `claude-2` on its first round — the stickiness rule above, measured. The confirmation was sent
+after the deadline, by the operator's own slowness, and the window **reverted** — and the revert changed
+nothing: `config.converged` before and after, no core restart.
+
+That is a property of reverting across a schema migration, and worth stating as one. A transaction stores
+the document it applied in the shape of its day, and it is now read back migrated (`currentShape`, above);
+the revert target was the schema-8 document, which migrates to the very schema-9 document that had just
+been applied. **A revert can only return to what the old document means under the running build, not to the
+files the old build wrote.** Here that was the desired state. A migration that changed what a document
+*does*, rather than only how it is written, would make the window's promise weaker than it looks, and such a
+migration has to say so in its own notes. An empty `hot` apply afterwards recorded a committed transaction
+for the state the device was in.
