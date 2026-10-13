@@ -39,7 +39,7 @@ import {
 import { createWindowWatch } from './core/window-watch.ts';
 import { createDriftMonitor, DRIFT_INTERVAL_MS } from './core/drift.ts';
 import { ruleSetAgesFor } from './core/rule-set-age.ts';
-import { emptyProfile, type ProfileDocument as ProfileDocumentType } from '@wayfarer/schemas';
+import { egressOf, emptyProfile, type ProfileDocument as ProfileDocumentType } from '@wayfarer/schemas';
 import { createWatchdog, deviceGuards, observeWatchdog } from './core/watchdog.ts';
 import { createLivenessMeter, KEEPALIVE_STATUS_SECONDS } from './core/liveness.ts';
 import { openVpnUnit } from './core/catalogue/openvpn.ts';
@@ -634,7 +634,7 @@ async function main(): Promise<void> {
   });
 
   /*
-   * The active profile's subscriptions, refreshed on their own `refreshHours`. See
+   * The active profile's groups, refreshed from their subscriptions on their own `refreshHours`. See
    * `core/subscription-refresh.ts` for what an unattended refresh may and may not change.
    */
   const subscriptionRefresh = refreshSubscriptions({
@@ -839,10 +839,15 @@ async function main(): Promise<void> {
   const watchdog = createWatchdog({
     core: watchdogCore,
     selector: CORE_TAGS.selector,
-    candidates: async () => {
-      return (activeDocument()?.tunnels ?? [])
-        .filter((tunnel) => tunnel.enabled && tunnel.role === 'alternative')
-        .map((tunnel) => tunnel.id);
+    // The groups and the egress, read from the active profile every round. See `WatchdogDeps.selections`.
+    selections: async () => {
+      const document = activeDocument();
+      if (document === null) return { groups: [], egress: null };
+      const egress = egressOf(document);
+      return {
+        groups: document.groups.filter((group) => group.enabled).map((group) => ({ id: group.id, members: group.members.map((member) => member.id) })),
+        egress: egress === null ? null : { kind: egress.kind, id: egress.id },
+      };
     },
     /**
      * The destination tunnels, read from the active profile every round so a tunnel added or changed
@@ -857,8 +862,6 @@ async function main(): Promise<void> {
     policy: () => {
       const policy = activeDocument()?.policy ?? emptyProfile({ name: 'none' }).policy;
       return {
-        priority: policy.priority,
-        excluded: policy.excluded,
         sticky: policy.sticky,
         onAllDown: policy.onAllDown,
         probes: policy.probes,
@@ -878,7 +881,7 @@ async function main(): Promise<void> {
   });
   const watchdogObserver = observers.register({
     name: 'tunnel-watchdog',
-    watches: 'each tunnel’s health: to move traffic off a failing alternative, and to report whether each destination tunnel is alive',
+    watches: 'each group member’s health: to keep each group on a healthy member, and to report whether each destination tunnel is alive',
     everyMs: () => (activeDocument()?.policy.probes.intervalSeconds ?? 30) * 1000,
   });
   const watchdogObservation = observeWatchdog(watchdogObserver);

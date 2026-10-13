@@ -33,6 +33,7 @@ import {
   type ManagedFile,
 } from './desired-state.ts';
 import { generateCoreConfigWithProvenance, tunnelDnsTag } from './generate/core-config.ts';
+import { memberIds, memberPointer, withMembersAsTunnels } from './groups.ts';
 import { generateDhcp } from './generate/dhcp.ts';
 import { generateFirewall } from './generate/firewall.ts';
 import { generateHostapd, HOSTAPD_CONTROL_DIR } from './generate/hostapd.ts';
@@ -153,7 +154,18 @@ export interface Plan {
 }
 
 export function plan(input: PlannerInput): Plan {
-  const { profile, inventory } = input;
+  const { inventory } = input;
+  // A group's members are planned as tunnels; see `core/groups.ts`.
+  const profile = withMembersAsTunnels(input.profile);
+  const members = memberIds(profile);
+  /**
+   * Members that will not run: the catalogue refused them, or the core would reject a field. A finding
+   * about one is a **warning**, never an error, and the member is left out of its group's selector.
+   * A feed offering one node this build cannot run must not stop the group's other members, or every
+   * other tunnel, from being applied — the bench board's `claude` feed offers such a node (REALITY with
+   * two fields the parser drops), measured 2026-10-12.
+   */
+  const unusableMembers = new Set<string>();
   const desired = emptyDesiredState();
 
   /* ── resolve hardware ─────────────────────────────────────────────────────────────────── */
@@ -285,7 +297,8 @@ export function plan(input: PlannerInput): Plan {
   /* ── invariants, before anything is generated ─────────────────────────────────────────── */
 
   const findings = checkInvariants({
-    profile,
+    // The stored document, not the expanded view: the invariants check groups as groups.
+    profile: input.profile,
     inventory,
     bindings,
     facts: input.facts,
@@ -295,6 +308,17 @@ export function plan(input: PlannerInput): Plan {
 
   for (const issue of input.tunnelIssues ?? []) {
     const tunnel = profile.tunnels[issue.tunnelIndex];
+    if (tunnel !== undefined && members.has(tunnel.id)) {
+      unusableMembers.add(tunnel.id);
+      findings.push({
+        severity: 'warning',
+        code: 'group_member_unusable',
+        message: `"${tunnel.name}", offered by its group's subscription, will not run: ${issue.message}`,
+        pointer: memberPointer(profile, tunnel.id) ?? issue.pointer,
+        hint: 'Nothing to change here: the group uses its other members. The feed decides what it offers.',
+      });
+      continue;
+    }
     findings.push({
       severity: 'error',
       code: 'tunnel_config_invalid',
@@ -484,8 +508,20 @@ export function plan(input: PlannerInput): Plan {
   const tunnelInterfaceNames: string[] = [];
   const tunnelDns = new Map<string, { address: string; viaInterface: string; domainSuffix: string[] }>();
   for (const tunnel of profile.tunnels) {
-    if (!tunnel.enabled) continue;
+    if (!tunnel.enabled || unusableMembers.has(tunnel.id)) continue;
     const emission = input.emissions.get(tunnel.id);
+    if (!emission && members.has(tunnel.id)) {
+      unusableMembers.add(tunnel.id);
+      const refusal = input.refusals?.find((entry) => entry.tunnelId === tunnel.id);
+      findings.push({
+        severity: 'warning',
+        code: 'group_member_unusable',
+        message: `"${tunnel.name}", offered by its group's subscription, will not run: ${refusal?.reason ?? 'the catalogue did not plan it'}`,
+        pointer: memberPointer(profile, tunnel.id) ?? `/groups`,
+        hint: 'Nothing to change here: the group uses its other members. The feed decides what it offers.',
+      });
+      continue;
+    }
     if (!emission) {
       /**
        * The catalogue refused, and the refusal is repeated verbatim rather than summarised.
@@ -557,6 +593,14 @@ export function plan(input: PlannerInput): Plan {
     }
   }
 
+  // A resource group's own resolver is reached through the group, exactly as a tunnel's is through the
+  // tunnel: `viaInterface` is the detour tag, and the group's tag is its selector.
+  for (const group of profile.groups ?? []) {
+    if (!group.enabled || group.dns === undefined) continue;
+    const dns = tunnelDnsFromProfile({ id: group.id, name: group.name, dns: group.dns } as ProfileDocument['tunnels'][number], input.capturedResolvers, findings);
+    if (dns) tunnelDns.set(group.id, { address: dns.address, viaInterface: dns.viaInterface, domainSuffix: dns.domainSuffix ?? [] });
+  }
+
   // The interface reading the fence is built from, with the running fence's followed networks retained
   // where they are only absent. One value for all three consumers below — the fence, the split into
   // followed and defended, and the record — so they cannot describe different readings.
@@ -566,7 +610,7 @@ export function plan(input: PlannerInput): Plan {
     profile,
     interfaces: { accessPoint: lanInterface, uplinks: uplinkInterfaces },
     emitted: new Map(
-      [...input.emissions.entries()].map(([id, emission]) => [
+      [...input.emissions.entries()].filter(([id]) => !unusableMembers.has(id)).map(([id, emission]) => [
         id,
         {
           target: emission.target,

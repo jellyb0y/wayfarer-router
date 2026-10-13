@@ -47,6 +47,7 @@ test('the migration fills the probe fields and produces a valid document', () =>
     'client name logging is a choice, not a default',
     'every tunnel becomes a catalogue entry',
     'a tunnel is asked whether it is alive, not a server behind it',
+    'a subscription is a group, and the egress is one id instead of a list',
   ]);
 
   const probes = (result.document['policy'] as { probes: Record<string, unknown> }).probes;

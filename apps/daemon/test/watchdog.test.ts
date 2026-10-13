@@ -1,5 +1,9 @@
 /**
  * The watchdog loop: what it records, what it refuses to decide, and where it reads the truth from.
+ *
+ * Since schema 9 the harness is one group, `g`, whose members are the tunnels the test gives delays for,
+ * and which is the egress: the main selector holds `g` and the fallback, and `g`'s own selector holds its
+ * members and `block`. `selected` is what the watchdog set `g` to; `mainSelected` what it set the main one to.
  */
 
 import { strict as assert } from 'node:assert';
@@ -8,8 +12,6 @@ import { createWatchdog, type WatchdogPolicy } from '../src/core/watchdog.ts';
 import type { CoreApi } from '../src/platform/core-api.ts';
 
 const POLICY: WatchdogPolicy = {
-  priority: ['a', 'b'],
-  excluded: [],
   sticky: true,
   onAllDown: 'block',
   probes: {
@@ -36,13 +38,19 @@ function harness(options: {
 }) {
   const events: { kind: string; summary: string }[] = [];
   const selected: string[] = [];
+  const mainSelected: string[] = [];
+  let main = 'g';
+  const members = Object.keys(options.delays);
   const asked: { outbound: string; url: string }[] = [];
   const cursor: Record<string, number> = {};
   let now = options.now ?? null;
 
   const core: CoreApi = {
     available: async () => options.available !== false,
-    proxies: async () => [{ name: 'wf-selector', type: 'Selector', now, all: ['a', 'b', 'block'] }],
+    proxies: async () => [
+      { name: 'g', type: 'Selector', now, all: [...members, 'block'] },
+      { name: 'wf-selector', type: 'Selector', now: main, all: ['g', 'block'] },
+    ],
     delay: async (outbound, url) => {
       asked.push({ outbound, url });
       if (options.probeCostMs) await new Promise((resolve) => setTimeout(resolve, options.probeCostMs));
@@ -58,10 +66,15 @@ function harness(options: {
       if (index < series.length) return series[index]!;
       return series.length === 0 ? null : series[series.length - 1]!;
     },
-    select: async (_selector, member) => {
+    select: async (selector, member) => {
       if (options.selectOk === false) return { ok: false, message: '500: no' };
-      selected.push(member);
-      now = member;
+      if (selector === 'wf-selector') {
+        mainSelected.push(member);
+        main = member;
+      } else {
+        selected.push(member);
+        now = member;
+      }
       return { ok: true, message: `selected ${member}` };
     },
   };
@@ -69,14 +82,14 @@ function harness(options: {
   const watchdog = createWatchdog({
     core,
     selector: 'wf-selector',
-    candidates: async () => Object.keys(options.delays),
+    selections: async () => ({ groups: [{ id: 'g', members }], egress: { kind: 'group', id: 'g' } }),
     guards: async () => [],
     policy: () => ({ ...POLICY, ...options.policy }),
     record: (event) => events.push({ kind: event.kind, summary: event.summary }),
     log: () => {},
   });
 
-  return { watchdog, events, selected, asked };
+  return { watchdog, events, selected, mainSelected, asked };
 }
 
 test('a core that is not answering decides nothing at all', async () => {
@@ -97,7 +110,7 @@ test('each tunnel is probed through itself, never through the selector', async (
   await watchdog.runOnce();
   // The selector answers for whatever it currently points at, so probing it measures the current choice
   // and calls it the health of the group.
-  assert.equal(asked.some((call) => call.outbound === 'wf-selector'), false);
+  assert.equal(asked.some((call) => call.outbound === 'wf-selector' || call.outbound === 'g'), false);
   assert.deepEqual([...new Set(asked.map((call) => call.outbound))], ['a', 'b']);
 });
 
@@ -121,11 +134,12 @@ test('a steady round records nothing, because the ring is the only record of a b
 });
 
 test('a switch is recorded with everything the decision saw', async () => {
-  // `a` never answers; `b` is fine. Two failing rounds are needed before the switch.
+  // `a` works, then stops answering; `b` is fine. Two failing rounds are needed before the switch.
   const { watchdog, events, selected } = harness({
-    delays: { a: [null], b: [40, 41, 42, 43] },
+    delays: { a: [10, 11, 12, 10, null, null, null, null, null], b: [40, 41, 42, 43] },
     now: 'a',
   });
+  await watchdog.runOnce();
   await watchdog.runOnce();
   assert.deepEqual(selected, [], 'one bad round is a bad sample');
   await watchdog.runOnce();
@@ -133,7 +147,7 @@ test('a switch is recorded with everything the decision saw', async () => {
   assert.ok(events.some((event) => event.kind === 'health.degraded'));
   const switched = events.find((event) => event.kind === 'health.switched');
   assert.ok(switched, 'the ring must answer "why did it do that" without a re-run');
-  assert.match(switched.summary, /traffic moved from a to b/);
+  assert.match(switched.summary, /group g moved from a to b/);
 });
 
 test('recovery is recorded as a transition, not on every healthy round', async () => {
@@ -154,14 +168,14 @@ test('a failed switch is recorded as a failure and the selection is not claimed'
   });
   await watchdog.runOnce();
   const outcome = await watchdog.runOnce();
-  assert.equal(outcome.changed, false);
-  assert.equal(outcome.selected, 'a', 'the selection is what the core says it is, not what we asked for');
+  assert.equal(outcome.groups?.[0]?.changed, false);
+  assert.equal(outcome.groups?.[0]?.selected, 'a', 'the selection is what the core says it is, not what we asked for');
   assert.ok(events.some((event) => event.kind === 'health.switch-failed'));
 });
 
 test('the current selection is read from the core, so a hand-made change is respected', async () => {
-  // An operator pointed the selector at `b` themselves. `b` is healthy, so stickiness keeps it — even
-  // though `a` is first in the configured order and also healthy.
+  // An operator pointed the group at `b` themselves. `b` is healthy, so stickiness keeps it — even
+  // though `a` measures faster.
   const { watchdog, selected } = harness({
     delays: { a: [10, 11, 12, 13], b: [80, 81, 82, 83] },
     now: 'b',
@@ -170,14 +184,51 @@ test('the current selection is read from the core, so a hand-made change is resp
   assert.deepEqual(selected, [], 'a watchdog trusting its own memory would have fought the operator');
 });
 
-test('nothing healthy selects the profile fallback', async () => {
-  const { watchdog, selected } = harness({
+test('nothing healthy: the group goes to block and the main selector to the profile fallback', async () => {
+  const { watchdog, selected, mainSelected } = harness({
     delays: { a: [null], b: [null] },
     now: 'a',
   });
   await watchdog.runOnce();
+  assert.deepEqual(mainSelected, [], 'one bad round is a bad sample for the egress too');
   await watchdog.runOnce();
   assert.deepEqual(selected, ['block']);
+  assert.deepEqual(mainSelected, ['block']);
+});
+
+test('when the current member dies, the healthiest of the rest is chosen — there is no order to follow', async () => {
+  const { watchdog, selected } = harness({
+    delays: { a: [null], b: [300, 310, 305, 300], c: [20, 21, 22, 20] },
+    now: 'a',
+  });
+  await watchdog.runOnce();
+  await watchdog.runOnce();
+  assert.deepEqual(selected, ['c']);
+});
+
+test('a member never seen healthy is not held by stickiness: the first round moves off it', async () => {
+  // A core starts a group on its first member, and a feed's first member can be one that never answers.
+  const { watchdog, selected } = harness({ delays: { dead: [null], good: [30, 31, 32, 30] }, now: 'dead' });
+  await watchdog.runOnce();
+  assert.deepEqual(selected, ['good']);
+});
+
+test('a member that has worked is held for its fail streak, as before', async () => {
+  const delays: Record<string, (number | null)[]> = { a: [20, 21, 22, 20, null, null, null, null], b: [30, 31, 32, 30] };
+  const { watchdog, selected } = harness({ delays, now: 'a' });
+  await watchdog.runOnce(); // a healthy
+  await watchdog.runOnce(); // a fails once: held
+  assert.deepEqual(selected, []);
+});
+
+test('a group that recovers takes the egress back from the fallback', async () => {
+  const delays: Record<string, (number | null)[]> = { a: [null, null, null, null, null, null, null, null, 20, 21, 22, 20] };
+  const { watchdog, mainSelected } = harness({ delays, now: 'a' });
+  await watchdog.runOnce();
+  await watchdog.runOnce();
+  assert.deepEqual(mainSelected, ['block']);
+  await watchdog.runOnce();
+  assert.deepEqual(mainSelected, ['block', 'g']);
 });
 
 test('a round that throws does not stop the loop', async () => {
@@ -193,7 +244,7 @@ test('a round that throws does not stop the loop', async () => {
   const watchdog = createWatchdog({
     core,
     selector: 'wf-selector',
-    candidates: async () => ['a'],
+    selections: async () => ({ groups: [{ id: 'g', members: ['a'] }], egress: { kind: 'group', id: 'g' } }),
     guards: async () => [],
     policy: () => POLICY,
     record: () => {},
@@ -213,9 +264,9 @@ test('the fallback the watchdog selects is a member of the generated selector', 
   const { generateCoreConfig } = await import('../src/core/generate/core-config.ts');
   const { emptyProfile } = await import('@wayfarer/schemas');
 
-  const build = (onAllDown: 'block' | 'direct', tunnels: unknown[]) => {
+  const build = (onAllDown: 'block' | 'direct', tunnels: unknown[], egress?: string) => {
     const base = emptyProfile({ name: 'Bench' }) as unknown as Record<string, unknown>;
-    const policy = { ...(base['policy'] as Record<string, unknown>), onAllDown };
+    const policy = { ...(base['policy'] as Record<string, unknown>), onAllDown, ...(egress === undefined ? {} : { egress }) };
     const config = generateCoreConfig({
       profile: { ...base, policy, tunnels } as never,
       interfaces: { accessPoint: 'wlx0', uplinks: new Map() },
@@ -229,24 +280,23 @@ test('the fallback the watchdog selects is a member of the generated selector', 
       uplinkNetworks: [],
     });
     const outbounds = config['outbounds'] as { type?: string; tag?: string; outbounds?: string[] }[];
-    return outbounds.find((entry) => entry.type === 'selector')!.outbounds ?? [];
+    return outbounds.find((entry) => entry.tag === 'wf-selector')!.outbounds ?? [];
   };
 
-  const tunnels = [
-    { id: 'a', name: 'A', role: 'alternative', enabled: true, provider: 'external-socks', config: { command: 'x', localPort: 1080 } },
-  ];
+  const tunnels = [{ id: 'a', name: 'A', enabled: true, protocol: 'vless', config: {} }];
 
   /*
    * A selector can only be set to one of its own members, and the watchdog points it at the fallback when
-   * nothing is healthy. Listing the fallback only when there were no alternatives made it unreachable in
-   * exactly the situation it exists for — measured on the bench board as
+   * the egress has nothing healthy. Listing the fallback only when there was nothing else made it
+   * unreachable in exactly the situation it exists for — measured on the bench board as
    * `could not point the selector at block: 400 {"message":"Selector update error: not found"}`.
    */
-  assert.deepEqual(build('block', tunnels), ['a', 'block']);
-  assert.deepEqual(build('direct', tunnels), ['a', 'direct']);
+  assert.deepEqual(build('block', tunnels, 'a'), ['a', 'block']);
+  assert.deepEqual(build('direct', tunnels, 'a'), ['a', 'direct']);
   // Last, so it is never chosen as the default.
-  assert.equal(build('block', tunnels).at(-1), 'block');
-  // And with no alternatives at all it is still the one member, so routing rules naming the selector work.
+  assert.equal(build('block', tunnels, 'a').at(-1), 'block');
+  // With no egress it is the one member, so routing rules naming the selector still work.
+  assert.deepEqual(build('block', tunnels), ['block']);
   assert.deepEqual(build('block', []), ['block']);
 });
 

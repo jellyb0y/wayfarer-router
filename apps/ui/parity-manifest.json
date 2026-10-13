@@ -107,6 +107,46 @@
       "screen": "tunnels"
     },
     {
+      "pointer": "/groups/-/dns/domainSuffix",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/dns/dynamic",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/dns/server",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/enabled",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/name",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/onUnavailable",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/refreshHours",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/resources/domainSuffix",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/resources/ipCidr",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/groups/-/url",
+      "screen": "tunnels"
+    },
+    {
       "pointer": "/meta/description",
       "screen": "settings"
     },
@@ -135,15 +175,11 @@
       "screen": "network"
     },
     {
-      "pointer": "/policy/excluded",
+      "pointer": "/policy/egress",
       "screen": "tunnels"
     },
     {
       "pointer": "/policy/onAllDown",
-      "screen": "tunnels"
-    },
-    {
-      "pointer": "/policy/priority",
       "screen": "tunnels"
     },
     {
@@ -241,22 +277,6 @@
     {
       "pointer": "/services/management/onUplinkNetwork",
       "screen": "network"
-    },
-    {
-      "pointer": "/subscriptions/-/enabled",
-      "screen": "tunnels"
-    },
-    {
-      "pointer": "/subscriptions/-/name",
-      "screen": "tunnels"
-    },
-    {
-      "pointer": "/subscriptions/-/refreshHours",
-      "screen": "tunnels"
-    },
-    {
-      "pointer": "/subscriptions/-/url",
-      "screen": "tunnels"
     },
     {
       "pointer": "/tunnels",
@@ -444,10 +464,6 @@
     },
     {
       "pointer": "/tunnels/-/resources/ipCidr",
-      "screen": "tunnels"
-    },
-    {
-      "pointer": "/tunnels/-/role",
       "screen": "tunnels"
     },
     {

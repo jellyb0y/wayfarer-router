@@ -115,14 +115,15 @@ test('adding a catalogue entry leaves stored profiles alone: no step, no version
   const stored = {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     tunnels: [
-      { id: 'a', name: 'A', role: 'alternative', enabled: true, onUnavailable: 'block', protocol: 'openvpn', config: { profile: 'client\n' } },
-      { id: 'b', name: 'B', role: 'alternative', enabled: true, onUnavailable: 'block', protocol: 'vless', config: { server: 'x.example.invalid', port: 443, id: 'u', network: 'tcp', security: 'tls' } },
+      { id: 'a', name: 'A', enabled: true, onUnavailable: 'block', protocol: 'openvpn', config: { profile: 'client\n' } },
+      { id: 'b', name: 'B', enabled: true, onUnavailable: 'block', protocol: 'vless', config: { server: 'x.example.invalid', port: 443, id: 'u', network: 'tcp', security: 'tls' } },
     ],
   };
   const { document, applied } = migrateProfile(structuredClone(stored) as never);
 
   // 8 since 2026-09-24, when `tunnels[].probe` was removed (plan row G30) — a removal, which is a step.
-  assert.equal(PROFILE_SCHEMA_VERSION, 8, 'a new catalogue entry must not move the document version');
+  // 9 since 2026-10-14, when a subscription became a group — a change of shape, which is a step too.
+  assert.equal(PROFILE_SCHEMA_VERSION, 9, 'a new catalogue entry must not move the document version');
   assert.deepEqual(applied, [], 'nothing has to be rewritten for a protocol nobody stored');
   assert.deepEqual(document, stored);
 
@@ -131,7 +132,6 @@ test('adding a catalogue entry leaves stored profiles alone: no step, no version
     Value.Check(Tunnel, {
       id: 'ru',
       name: 'Russian proxy',
-      role: 'alternative',
       enabled: true,
       onUnavailable: 'block',
       protocol: 'proxy',
@@ -145,7 +145,6 @@ test('adding a catalogue entry leaves stored profiles alone: no step, no version
     Value.Check(Tunnel, {
       id: 'ru',
       name: 'Russian proxy',
-      role: 'alternative',
       enabled: true,
       onUnavailable: 'block',
       protocol: 'vless',
@@ -208,14 +207,19 @@ test('version 8 removes a stored probe, and nothing else about the tunnel', () =
   const before = boardAtVersion7();
   const { document, applied, from } = migrateProfile(structuredClone(before));
   assert.equal(from, 7);
-  assert.deepEqual(applied, ['a tunnel is asked whether it is alive, not a server behind it']);
-  assert.equal(document['schemaVersion'], 8);
+  assert.deepEqual(applied, [
+    'a tunnel is asked whether it is alive, not a server behind it',
+    'a subscription is a group, and the egress is one id instead of a list',
+  ]);
+  assert.equal(document['schemaVersion'], 9);
   const tunnels = document['tunnels'] as Record<string, unknown>[];
   assert.equal('probe' in tunnels[0]!, false);
   // Everything else is carried, the resource that was the probe target included.
-  const { probe: _gone, ...rest } = (before['tunnels'] as Record<string, unknown>[])[0]!;
+  // `role` goes too, by the next step (8 → 9).
+  const { probe: _gone, role: _role0, ...rest } = (before['tunnels'] as Record<string, unknown>[])[0]!;
   assert.deepEqual(tunnels[0], rest);
-  assert.deepEqual(tunnels[1], (before['tunnels'] as unknown[])[1]);
+  const { role: _role1, ...second } = (before['tunnels'] as Record<string, unknown>[])[1]!;
+  assert.deepEqual(tunnels[1], second);
   assertProfileDocument(document);
 });
 
@@ -229,4 +233,133 @@ test('a document at version 8 that still names a probe is refused by name, not w
   assert.match(faults[0]!.message, /no longer takes "probe"/);
   assert.match(faults[0]!.hint, /Nothing replaces it/);
   assert.throws(() => assertProfileDocument(current));
+});
+
+/* ── 8 → 9: a subscription is a group ─────────────────────────────────────────────────────── */
+
+const vless = (server: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  server,
+  port: 8080,
+  id: { $secret: 'uuid' },
+  network: 'tcp',
+  security: 'none',
+  ...extra,
+});
+
+/**
+ * The bench board's profile as it stood on 2026-10-14, structurally — every id, role, reference and
+ * order as read through the API, the credentials replaced.
+ */
+function boardAtVersion8(): Record<string, unknown> {
+  const { groups: _groups, ...current } = emptyProfile({ name: 'CryptoCAT VPN' }) as unknown as Record<string, unknown>;
+  const derived = (subscription: string, server: string, port = 8080) => ({ subscription, node: `vless://${server}:${String(port)}` });
+  return {
+    ...current,
+    schemaVersion: 8,
+    tunnels: [
+      { id: 'germany', name: 'Germany · Frankfurt', role: 'alternative', enabled: true, onUnavailable: 'block', protocol: 'vless', config: vless('5.39.255.51'), derivedFrom: derived('cryptocat', '5.39.255.51') },
+      { id: 'france', name: '🇩🇪 Germany · Frankfurt 2', role: 'alternative', enabled: true, onUnavailable: 'block', protocol: 'vless', config: vless('82.21.117.116'), derivedFrom: derived('cryptocat', '82.21.117.116') },
+      {
+        id: 'collect-vpn', name: 'Collectibles · via VPN', role: 'resource', enabled: true, onUnavailable: 'block', protocol: 'openvpn',
+        config: { profile: { $secret: 'client\n' }, via: 'failover' }, resources: { domainSuffix: ['collectibles.internal'], ipCidr: ['10.20.0.0/16'] },
+      },
+      {
+        id: 'oddscp', name: 'Oddscp work', role: 'resource', enabled: true, onUnavailable: 'block', protocol: 'openvpn',
+        config: { profile: { $secret: 'client\n' } }, resources: { ipCidr: ['10.8.0.0/24'] },
+      },
+      { id: 'claude-1', name: 'luwzxe00', role: 'alternative', enabled: false, onUnavailable: 'block', protocol: 'vless', config: vless('82.22.50.101', { port: 51060 }), derivedFrom: derived('claude', '82.22.50.101', 51060) },
+      {
+        id: 'claude', name: 'Anthropic', role: 'resource', enabled: true, onUnavailable: 'block', protocol: 'vless', config: vless('82.22.50.101'),
+        derivedFrom: derived('claude', '82.22.50.101'), resources: { domainSuffix: ['claude.ai', 'anthropic.com'] },
+      },
+      { id: 'cryptocat-1', name: '🇵🇱 Poland · Warsaw', role: 'alternative', enabled: false, onUnavailable: 'block', protocol: 'vless', config: vless('81.85.73.157'), derivedFrom: derived('cryptocat', '81.85.73.157') },
+    ],
+    subscriptions: [
+      { id: 'cryptocat', name: 'CryptoCAT', enabled: true, url: { $secret: 'http://feed.example/sub/a' }, refreshHours: 1, lastRefresh: { at: '2026-10-13T22:17:07.179Z', ok: true, detail: '3 node(s) offered', nodeCount: 3 } },
+      { id: 'claude', name: 'Claude', enabled: true, url: { $secret: 'https://feed.example/sub/b' }, refreshHours: 1 },
+    ],
+    policy: { ...(current['policy'] as Record<string, unknown>), priority: ['germany', 'france'], excluded: [] },
+    routing: {
+      ...(current['routing'] as Record<string, unknown>),
+      rules: [
+        { kind: 'protect-own-networks' },
+        { kind: 'tunnel-resources' },
+        { kind: 'domainSuffix', suffixes: ['ru'], action: { outbound: 'direct' } },
+        { kind: 'domain', domains: ['api.example'], action: { outbound: 'germany' } },
+      ],
+    },
+  };
+}
+
+test('version 9: each subscription becomes a group of its derived tunnels, which keep their ids and order', () => {
+  const { document, applied, from } = migrateProfile(boardAtVersion8());
+  assert.equal(from, 8);
+  assert.deepEqual(applied, ['a subscription is a group, and the egress is one id instead of a list']);
+  assert.equal(document['schemaVersion'], 9);
+  assert.equal('subscriptions' in document, false);
+
+  // Only a person's tunnels remain, without `role` or `derivedFrom`.
+  const tunnels = document['tunnels'] as Record<string, unknown>[];
+  assert.deepEqual(tunnels.map((tunnel) => tunnel['id']), ['collect-vpn', 'oddscp']);
+  for (const tunnel of tunnels) {
+    assert.equal('role' in tunnel, false);
+    assert.equal('derivedFrom' in tunnel, false);
+  }
+  // `via: failover` still means the egress, which is now a group.
+  assert.equal((tunnels[0]!['config'] as Record<string, unknown>)['via'], 'failover');
+
+  const groups = document['groups'] as Record<string, unknown>[];
+  assert.deepEqual(groups.map((group) => group['id']), ['cryptocat', 'claude']);
+  const [cryptocat, claude] = groups as [Record<string, unknown>, Record<string, unknown>];
+  // Disabled ones too: a group has no disabled members. Same ids, so the same outbound tags and ports.
+  assert.deepEqual((cryptocat['members'] as Record<string, unknown>[]).map((member) => member['id']), ['germany', 'france', 'cryptocat-1']);
+  // `claude` the member shares an id with `claude` the group, and every id is an outbound tag: the member
+  // is renamed, to the first `claude-<n>` nothing uses. Found by a dry run against the board's profile.
+  assert.deepEqual((claude['members'] as Record<string, unknown>[]).map((member) => member['id']), ['claude-1', 'claude-2']);
+  assert.equal((cryptocat['members'] as Record<string, unknown>[])[0]!['node'], 'vless://5.39.255.51:8080');
+  assert.deepEqual(cryptocat['lastRefresh'], { at: '2026-10-13T22:17:07.179Z', ok: true, detail: '3 node(s) offered', nodeCount: 3 });
+
+  // The group whose node carried resources carries them now; the other carries none.
+  assert.deepEqual(claude['resources'], { domainSuffix: ['claude.ai', 'anthropic.com'] });
+  assert.equal(claude['onUnavailable'], 'block');
+  assert.equal('resources' in cryptocat, false);
+
+  // The first of the old order, as its group; the list is gone.
+  const policy = document['policy'] as Record<string, unknown>;
+  assert.equal(policy['egress'], 'cryptocat');
+  assert.equal('priority' in policy, false);
+  assert.equal('excluded' in policy, false);
+
+  // A rule that named a derived tunnel names its group.
+  const rules = (document['routing'] as Record<string, unknown>)['rules'] as Record<string, unknown>[];
+  assert.deepEqual(rules[3], { kind: 'domain', domains: ['api.example'], action: { outbound: 'cryptocat' } });
+  assert.deepEqual(rules[2], { kind: 'domainSuffix', suffixes: ['ru'], action: { outbound: 'direct' } });
+
+  assertProfileDocument(document);
+});
+
+test('version 9: the egress skips an excluded or disabled alternative, and a hand-authored one stays a tunnel', () => {
+  const before = boardAtVersion8();
+  const tunnels = before['tunnels'] as Record<string, unknown>[];
+  tunnels.unshift({ id: 'hq', name: 'HQ', role: 'alternative', enabled: true, onUnavailable: 'block', protocol: 'openvpn', config: { profile: { $secret: 'client\n' } }, resources: { ipCidr: ['192.0.2.0/24'] } });
+  (before['policy'] as Record<string, unknown>)['priority'] = ['germany', 'hq'];
+  (before['policy'] as Record<string, unknown>)['excluded'] = ['germany'];
+  const { document } = migrateProfile(before);
+  assert.equal((document['policy'] as Record<string, unknown>)['egress'], 'hq');
+  const hq = (document['tunnels'] as Record<string, unknown>[]).find((tunnel) => tunnel['id'] === 'hq')!;
+  // An alternative's resources were never routed; kept, they would make it a resource under schema 9.
+  assert.equal('resources' in hq, false);
+  assertProfileDocument(document);
+});
+
+test('a document at version 9 that still names a removed field is refused by name', () => {
+  const current = migrateProfile(boardAtVersion8()).document;
+  (current['tunnels'] as Record<string, unknown>[])[0]!['role'] = 'resource';
+  assert.equal(profileFaults(current)[0]!.code, 'tunnel_field_removed');
+  assert.equal(profileFaults(current)[0]!.pointer, '/tunnels/0/role');
+
+  const withList = migrateProfile(boardAtVersion8()).document;
+  (withList['policy'] as Record<string, unknown>)['priority'] = ['cryptocat'];
+  assert.equal(profileFaults(withList)[0]!.code, 'field_removed');
+  assert.equal(profileFaults(withList)[0]!.pointer, '/policy/priority');
 });

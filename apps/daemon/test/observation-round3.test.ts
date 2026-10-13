@@ -137,11 +137,9 @@ test("a round slower than its interval still reads as looking, because the round
   const watchdog = createWatchdog({
     core,
     selector: 'wf-selector',
-    candidates: async () => ['a'],
+    selections: async () => ({ groups: [], egress: { kind: 'tunnel', id: 'a' } }),
     guards: async () => [],
     policy: () => ({
-      priority: ['a'],
-      excluded: [],
       sticky: false,
       onAllDown: 'block',
       probes: {

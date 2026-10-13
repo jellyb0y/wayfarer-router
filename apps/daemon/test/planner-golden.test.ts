@@ -250,7 +250,7 @@ const SCENARIOS: { name: string; inventory: keyof typeof INVENTORIES; profile: P
         {
           id: 'alt-a',
           name: 'Warsaw',
-          role: 'alternative', onUnavailable: 'block' as const,
+          onUnavailable: 'block' as const,
           enabled: true,
           protocol: 'vless',
           config: {
@@ -265,7 +265,7 @@ const SCENARIOS: { name: string; inventory: keyof typeof INVENTORIES; profile: P
           // Obfuscated, with two entry points: the shape that had a port written by hand in two files.
           id: 'alt-b',
           name: 'Berlin',
-          role: 'alternative', onUnavailable: 'block' as const,
+          onUnavailable: 'block' as const,
           enabled: true,
           protocol: 'cloak-openvpn',
           config: {
@@ -302,7 +302,7 @@ const SCENARIOS: { name: string; inventory: keyof typeof INVENTORIES; profile: P
         {
           id: 'res-hq',
           name: 'HQ',
-          role: 'resource', onUnavailable: 'block' as const,
+          onUnavailable: 'block' as const,
           enabled: true,
           protocol: 'openvpn',
           config: { profile: 'client\ndev tun\nremote hq.example.net 1194\n', interfaceSuffix: '0' },
@@ -314,7 +314,7 @@ const SCENARIOS: { name: string; inventory: keyof typeof INVENTORIES; profile: P
           // from the profile either.
           id: 'alt-off',
           name: 'Disabled',
-          role: 'alternative', onUnavailable: 'block' as const,
+          onUnavailable: 'block' as const,
           enabled: false,
           protocol: 'vless',
           config: {
@@ -326,9 +326,29 @@ const SCENARIOS: { name: string; inventory: keyof typeof INVENTORIES; profile: P
           },
         },
       ],
+      // Schema 9: a group of one feed node with destinations of its own, beside the tunnels.
+      groups: [
+        {
+          id: 'feed',
+          name: 'Feed',
+          enabled: true,
+          url: 'https://feed.example/sub/placeholder',
+          refreshHours: 1,
+          onUnavailable: 'block' as const,
+          resources: { domainSuffix: ['.feed.example'] },
+          members: [
+            {
+              id: 'feed-1',
+              name: 'Feed node',
+              node: 'vless://198.51.100.11:443',
+              protocol: 'vless' as const,
+              config: { server: '198.51.100.11', port: 443, id: 'a-placeholder-account', network: 'tcp', security: 'tls' },
+            },
+          ],
+        },
+      ],
       policy: {
-        priority: ['alt-b', 'alt-a'],
-        excluded: [],
+        egress: 'alt-b',
         sticky: true,
         probes: (emptyProfile({ name: 'x' }) as unknown as ProfileDocument).policy.probes,
         onAllDown: 'block',
@@ -364,11 +384,13 @@ const SCENARIOS: { name: string; inventory: keyof typeof INVENTORIES; profile: P
     inventory: 'one-built-in-radio',
     profile: {
       ...base('Contended'),
+      // The one tunnel is the egress, as it was the one alternative before schema 9.
+      policy: { ...base('Contended').policy, egress: 'alt-a' },
       tunnels: [
         {
           id: 'alt-a',
           name: 'Warsaw',
-          role: 'alternative', onUnavailable: 'block' as const,
+          onUnavailable: 'block' as const,
           enabled: true,
           protocol: 'vless',
           config: {
@@ -569,7 +591,7 @@ function render(scenario: (typeof SCENARIOS)[number]): string {
   if (everything === undefined) throw new Error('the kill-switch-off scenario is missing');
   let marked = false;
   const tunnels = everything.profile.tunnels.map((tunnel) => {
-    if (marked || tunnel.protocol !== 'openvpn' || tunnel.role !== 'resource') return tunnel;
+    if (marked || tunnel.protocol !== 'openvpn' || tunnel.resources === undefined) return tunnel;
     marked = true;
     return { ...tunnel, config: { ...tunnel.config, via: 'failover' } } as typeof tunnel;
   });

@@ -27,6 +27,8 @@ import {
   CORE_RULE_PRIORITY,
   CORE_TAGS,
   DEVICE_TUN_ADDRESS,
+  egressOf,
+  resourceCarriers,
   FALL_THROUGH_DNS,
   FALL_THROUGH_ORDINARY,
   fallThroughDnsSelectorTag,
@@ -34,7 +36,6 @@ import {
   generateRoutingRules,
   guardSelectorTag,
   type ProfileDocument,
-  type Tunnel,
 } from '@wayfarer/schemas';
 import { networkCidr } from '../invariants.ts';
 import { PATHS } from '../desired-state.ts';
@@ -145,9 +146,6 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
   const { profile } = input;
   const observedNetworks = canonicalNetworks(input.uplinkNetworks);
   const enabled = profile.tunnels.filter((tunnel) => tunnel.enabled);
-  const alternatives = enabled.filter(
-    (tunnel) => tunnel.role === 'alternative' && !profile.policy.excluded.includes(tunnel.id),
-  );
 
   const outbounds: Record<string, unknown>[] = [];
   const endpoints: Record<string, unknown>[] = [];
@@ -162,39 +160,53 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
     else outbounds.push(object);
   }
 
-  // The selector exists even with one alternative, and even with none. With one, it is what the
-  // watchdog switches without rewriting the configuration; with none, it keeps every routing rule
-  // that names it valid, so removing the last tunnel is not a configuration error.
   /**
-   * The fallback is a **member** of the selector, always — not only when there are no alternatives.
+   * One selector per enabled group, **tagged with the group's id**, so a rule, a guard, an OpenVPN `via`
+   * or the egress names a group exactly the way it names a tunnel. Its members are the group's members
+   * that were planned (`core/groups.ts`; one the catalogue refused is a warning and is not here), then
+   * `block`, so the watchdog has somewhere to point it when none is healthy — a selector can only be set
+   * to one of its own members.
    *
-   * The watchdog points the selector at this when nothing is healthy, and a selector can only be set to
-   * one of its own members. Listing it only in the no-alternatives case meant the fallback was
-   * unreachable in exactly the situation it exists for. Measured on the bench board, 2026-09-21, with two
-   * tunnels configured and both failing:
+   * The watchdog chooses the member. The first planned member is only the default a core starts on
+   * before any reading exists. Sticky keeps live connections where they are when the watchdog moves it.
+   */
+  for (const group of profile.groups ?? []) {
+    if (!group.enabled) continue;
+    const planned = group.members.map((member) => member.id).filter((id) => input.emitted.has(id));
+    outbounds.push({
+      type: 'selector',
+      tag: group.id,
+      outbounds: [...planned, CORE_TAGS.block],
+      default: planned[0] ?? CORE_TAGS.block,
+      interrupt_exist_connections: !profile.policy.sticky,
+    });
+  }
+
+  /**
+   * The main selector: the egress, and the fallback.
+   *
+   * It exists even with no egress, so every routing rule, DNS server and OpenVPN `via` that names it stays
+   * valid. With an egress it holds exactly two members — the egress (a group's selector or a tunnel's
+   * outbound) and the fallback the watchdog moves it to when the egress has nothing healthy. Choosing
+   * *among* the egress's members is the group selector's business, not this one's.
+   *
+   * The fallback is a **member** of the selector, always. Measured on the bench board, 2026-09-21, with
+   * the fallback listed only when no tunnel existed:
    *
    * ```
    * health.switch-failed  could not point the selector at block:
    *                       400 {"message":"Selector update error: not found"}
    * ```
-   *
-   * The event ring is the only reason that was visible: the watchdog reported the refusal instead of
-   * assuming the selection had taken, so the device said plainly that it could not do the one thing left
-   * to do. It is listed last so it is never the default choice.
    */
   const fallbackTag = profile.policy.onAllDown === 'direct' ? CORE_TAGS.direct : CORE_TAGS.block;
-  const selectorMembers =
-    alternatives.length > 0
-      ? [...orderedAlternatives(alternatives, profile.policy.priority), fallbackTag]
-      : [fallbackTag];
-
+  const egress = egressOf(profile);
+  const egressTag =
+    egress === null ? null : egress.kind === 'group' ? egress.id : input.emitted.has(egress.id) ? egress.id : null;
   outbounds.push({
     type: 'selector',
     tag: CORE_TAGS.selector,
-    outbounds: selectorMembers,
-    ...(alternatives.length > 0 ? { default: orderedAlternatives(alternatives, profile.policy.priority)[0] } : {}),
-    // Sticky: stay on a healthy choice rather than returning to the top the moment the preferred one
-    // recovers, which otherwise moves every live connection for no gain.
+    outbounds: egressTag === null ? [fallbackTag] : [egressTag, fallbackTag],
+    ...(egressTag === null ? {} : { default: egressTag }),
     interrupt_exist_connections: !profile.policy.sticky,
   });
 
@@ -219,8 +231,10 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
    * running on the tunnel that was just declared unusable would keep the leak open for exactly as long as
    * something kept a socket alive.
    */
-  for (const tunnel of enabled) {
-    if (tunnel.role !== 'resource' || tunnel.onUnavailable !== 'block') continue;
+  // Tunnels and groups alike (`resourceCarriers`): a group's tag is its selector, so the guard wraps it.
+  const carriersOfResources = resourceCarriers(profile);
+  for (const tunnel of carriersOfResources) {
+    if (tunnel.onUnavailable !== 'block') continue;
     outbounds.push({
       type: 'selector',
       tag: guardSelectorTag(tunnel.id),
@@ -243,7 +257,7 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
    * the dead tunnel carries nothing and should be re-dialled the ordinary way; switching back, a connection
    * left open on the ordinary route is traffic leaving outside the tunnel after the tunnel came back.
    */
-  const fallThrough = enabled.filter((tunnel) => tunnel.role === 'resource' && tunnel.onUnavailable === 'fall-through');
+  const fallThrough = carriersOfResources.filter((tunnel) => tunnel.onUnavailable === 'fall-through');
   for (const tunnel of fallThrough) {
     outbounds.push({
       type: 'selector',
@@ -619,16 +633,4 @@ function directDnsServer(profile: ProfileDocument): Record<string, unknown>[] {
   return [{ type: 'tcp', tag: CORE_TAGS.dnsDirect, server: profile.dns.direct }];
 }
 
-/**
- * The alternatives in preference order.
- *
- * The stated priority first, then anything enabled that the priority list does not mention — a
- * tunnel somebody added and forgot to prioritise should still be reachable, not silently inert.
- */
-function orderedAlternatives(alternatives: Tunnel[], priority: string[]): string[] {
-  const available = new Set(alternatives.map((tunnel) => tunnel.id));
-  const ordered = priority.filter((id) => available.has(id));
-  for (const tunnel of alternatives) if (!ordered.includes(tunnel.id)) ordered.push(tunnel.id);
-  return ordered;
-}
 

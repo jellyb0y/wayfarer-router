@@ -97,19 +97,19 @@ function benchProfile(): ProfileDocument {
       {
         id: 'partner',
         name: 'Partner',
-        role: 'resource',
         onUnavailable: 'block',
         enabled: true,
         protocol: 'openvpn',
         config: { profile: 'client\ndev tun\nremote vpn.example.invalid 1194\n', interfaceSuffix: 'prt' },
         resources: { ipCidr: ['172.30.0.212/32'], domainSuffix: ['partner.invalid'] },
       },
-      { id: 'corp', name: 'Corp', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn', config: cloak('crp') },
-      { id: 'hq', name: 'HQ', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn', config: cloak('hq') },
+      // Since schema 9 a tunnel is a destination tunnel because it declares resources; these two did
+      // only by their role, so they are given one each.
+      { id: 'corp', name: 'Corp', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn', config: cloak('crp'), resources: { domainSuffix: ['corp.invalid'] } },
+      { id: 'hq', name: 'HQ', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn', config: cloak('hq'), resources: { domainSuffix: ['hq.invalid'] } },
       {
         id: 'relay',
         name: 'Relay',
-        role: 'resource',
         onUnavailable: 'block',
         enabled: true,
         protocol: 'vless',
@@ -119,11 +119,11 @@ function benchProfile(): ProfileDocument {
       {
         id: 'spare',
         name: 'Spare',
-        role: 'resource',
         onUnavailable: 'fall-through',
         enabled: true,
         protocol: 'proxy',
         config: { type: 'socks', server: '198.51.100.20', port: 1080 },
+        resources: { domainSuffix: ['spare.invalid'] },
       },
     ],
   } as unknown as ProfileDocument;
@@ -263,10 +263,10 @@ async function bench(
   const watchdog = createWatchdog({
     core,
     selector: 'wf-selector',
-    candidates: async () => [],
+    selections: async () => ({ groups: [], egress: null }),
     guards: deviceGuards({ document: () => document, tunnelUnits: () => store.device().tunnelUnits }),
     liveness: meter,
-    policy: () => ({ priority: [], excluded: [], sticky: true, onAllDown: 'block', probes }),
+    policy: () => ({ sticky: true, onAllDown: 'block', probes }),
     record: (event) => {
       events.push({ kind: event.kind, summary: event.summary });
       observation.recorded(event);

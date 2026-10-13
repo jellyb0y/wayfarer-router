@@ -438,7 +438,7 @@ test('a change to the exclusion list is a network change, and a change to an out
   const profileWithTunnel = (): Record<string, unknown> => {
     const profile = emptyProfile({ name: 'Bench' }) as Record<string, unknown>;
     profile['tunnels'] = [
-      { id: 'hq', name: 'HQ', role: 'alternative', enabled: true, provider: 'socks', config: { command: 'x', localPort: 1080 } },
+      { id: 'hq', name: 'HQ', enabled: true, provider: 'socks', config: { command: 'x', localPort: 1080 } },
     ];
     return profile;
   };

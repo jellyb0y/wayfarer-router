@@ -151,7 +151,6 @@ function benchShapedProfile(): Record<string, unknown> {
       {
         id: 'corp',
         name: 'Collector',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'block',
         protocol: 'cloak-openvpn',
@@ -164,7 +163,6 @@ function benchShapedProfile(): Record<string, unknown> {
       {
         id: 'partner',
         name: 'Second',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'block',
         protocol: 'openvpn',
@@ -173,7 +171,6 @@ function benchShapedProfile(): Record<string, unknown> {
       {
         id: 'sub',
         name: 'External',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'block',
         protocol: 'vless',
@@ -191,7 +188,6 @@ function benchShapedProfile(): Record<string, unknown> {
       {
         id: 'hq',
         name: 'HQ',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'block',
         protocol: 'cloak-openvpn',

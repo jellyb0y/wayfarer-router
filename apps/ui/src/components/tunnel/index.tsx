@@ -84,7 +84,6 @@ export function blankTunnel(protocol: TunnelProtocol, existing: readonly Tunnel[
   return {
     id: `tunnel-${counter}`,
     name: `${TUNNEL_PROTOCOL_TITLES[protocol]} ${counter}`,
-    role: 'alternative',
     enabled: true,
     onUnavailable: 'block',
     protocol,

@@ -47,7 +47,6 @@ function cloakTunnel(entryPoints: Record<string, unknown>[]): Record<string, unk
   return {
     id: 'hq',
     name: 'HQ',
-    role: 'alternative',
     enabled: true,
     onUnavailable: 'fall-through',
     protocol: 'cloak-openvpn',
@@ -185,7 +184,6 @@ test('a protocol outside the catalogue is refused by name, and the refusal says 
     {
       id: 'legacy',
       name: 'Legacy',
-      role: 'alternative',
       enabled: true,
       onUnavailable: 'fall-through',
       protocol: 'shadowsocks',
@@ -209,7 +207,6 @@ test('a protocol outside the catalogue is refused by name, and the refusal says 
 const vlessTunnel = (config: Record<string, unknown>): Record<string, unknown> => ({
   id: 'sub',
   name: 'Subscription',
-  role: 'alternative',
   enabled: true,
   onUnavailable: 'fall-through',
   protocol: 'vless',
@@ -262,7 +259,6 @@ test('a stored configuration validates although its secrets are still wrapped', 
       {
         id: 'hq',
         name: 'HQ',
-        role: 'alternative',
         enabled: true,
         onUnavailable: 'fall-through',
         protocol: 'openvpn',

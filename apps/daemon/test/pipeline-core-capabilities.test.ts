@@ -50,7 +50,6 @@ function vlessProfile(): ProfileDocument {
       {
         id: 'alt-a',
         name: 'Warsaw',
-        role: 'alternative',
         onUnavailable: 'block',
         enabled: true,
         protocol: 'vless',

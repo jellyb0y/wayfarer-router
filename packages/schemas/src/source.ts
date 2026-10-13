@@ -125,3 +125,62 @@ export function sourceOf(schema: unknown): FieldSource | null {
   const value = (schema as Record<string, unknown>)[SOURCE_ANNOTATION];
   return (FIELD_SOURCES as readonly string[]).includes(String(value)) ? (value as FieldSource) : null;
 }
+
+/**
+ * A declaration copied for a position **the subscription feed writes**: every mark inside it is
+ * removed and every leaf is marked `subscription`.
+ *
+ * Exists for one place, `/groups/-/members/-/config`. A group's members are the catalogue
+ * configurations the feed currently offers, so they are the same declarations a hand-authored tunnel
+ * uses — and those are marked `person` as a whole (see `VlessConfig`), which would demand a control
+ * for every field of every member. A control there would be typed over by the next refresh. Copying
+ * rather than re-marking in place, because the declarations are shared with `/tunnels`, where the
+ * `person` mark is right; and marking leaf by leaf, because an exempting mark must never be inherited.
+ * The secret annotation is kept: a feed-written credential is still a credential in storage.
+ */
+export function FeedWritten<T extends TSchema>(schema: T): T {
+  const copy = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(copy);
+    if (typeof node !== 'object' || node === null) return node;
+    const record = node as Record<string | symbol, unknown>;
+    const out: Record<string | symbol, unknown> = {};
+    // `Reflect.ownKeys`, not `Object.entries`: TypeBox keeps a node's kind under a symbol, and a copy
+    // without it is a schema `Value.Check` no longer recognises.
+    for (const key of Reflect.ownKeys(record)) {
+      const value = record[key];
+      if (key === SOURCE_ANNOTATION) continue;
+      out[key] = key === 'properties' && typeof value === 'object' && value !== null
+        ? Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, copy(child)]))
+        : key === 'items' || key === 'anyOf' || key === 'oneOf' || key === 'allOf'
+          ? copy(value)
+          : value;
+    }
+    const composite =
+      (typeof out['properties'] === 'object' && out['properties'] !== null) ||
+      (typeof out['items'] === 'object' && out['items'] !== null && !Array.isArray(out['items']) &&
+        typeof (out['items'] as Record<string, unknown>)['properties'] === 'object');
+    if (!composite) out[SOURCE_ANNOTATION] = 'subscription';
+    return out;
+  };
+  return copy(schema) as T;
+}
+
+/**
+ * A deep copy of a declaration, marks and all, for a second use of it at another pointer.
+ *
+ * Declarations shared by reference are what the position walk's ancestor guard exists for (see
+ * `documentPositions`), and the set of them is pinned by a test so that it shrinks only on purpose.
+ * A group takes a tunnel's `resources`, `dns` and `onUnavailable` declarations; copied, they add
+ * positions without adding a shared family.
+ */
+export function Copy<T extends TSchema>(schema: T): T {
+  const copy = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(copy);
+    if (typeof node !== 'object' || node === null) return node;
+    const record = node as Record<string | symbol, unknown>;
+    const out: Record<string | symbol, unknown> = {};
+    for (const key of Reflect.ownKeys(record)) out[key] = copy(record[key]);
+    return out;
+  };
+  return copy(schema) as T;
+}

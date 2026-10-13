@@ -22,6 +22,7 @@
 
 import {
   decideSelection,
+  score,
   summarise,
   type ProbeThresholds,
   type TunnelHealth,
@@ -34,15 +35,20 @@ import {
   fallThroughDnsSelectorTag,
   fallThroughSelectorTag,
   guardSelectorTag,
+  resourceCarriers,
   type ProfileDocument,
 } from '@wayfarer/schemas';
 import type { ObserverHandle, ObserverItem } from './observers.ts';
 import { CATALOGUE, type CatalogueEntry } from './catalogue/index.ts';
 import type { Liveness, LivenessBasis, LivenessMethod, LivenessSubject } from './liveness.ts';
 
+/** A group's selector and its members, and the egress — see `WatchdogDeps.selections`. */
+export interface WatchdogSelections {
+  groups: { id: string; members: string[] }[];
+  egress: { kind: 'group' | 'tunnel'; id: string } | null;
+}
+
 export interface WatchdogPolicy {
-  priority: string[];
-  excluded: string[];
   sticky: boolean;
   onAllDown: 'block' | 'direct';
   /**
@@ -57,16 +63,11 @@ export interface WatchdogDeps {
   core: CoreApi;
   /** The selector this project generates. Named rather than discovered, because it is ours. */
   selector: string;
-  /** Outbound names that are candidates: the tunnels, never `direct`, `block` or the selector itself. */
-  candidates: () => Promise<string[]>;
   /**
-   * The destination tunnels, each with how its own protocol is asked whether it is alive — see
-   * `guardedTunnels`.
-   *
-   * Separate from `candidates` because these are not interchangeable and are never selected *into*: the
-   * only question about each is whether it is alive, which makes this a different reading with a
-   * different consequence for getting it wrong.
+   * What to choose among this round, read from the active profile every round: each enabled group (its
+   * selector is tagged with its id) with its members, and the egress the main selector points at.
    */
+  selections: () => Promise<WatchdogSelections>;
   guards: () => Promise<GuardedTunnel[]>;
   policy: () => WatchdogPolicy;
   record: (event: { level: 'info' | 'warn' | 'error'; kind: string; summary: string; detail: unknown }) => void;
@@ -177,8 +178,8 @@ export interface GuardedTunnel {
 /**
  * The destination tunnels of a document, each with how its own protocol is asked whether it is alive.
  *
- * Every enabled `resource` tunnel, whatever its `onUnavailable`: the owner is told the liveness of each
- * one. What the watchdog *does* with a reading is decided per tunnel in `runGuards`.
+ * Every enabled tunnel and group with resources, whatever its `onUnavailable`: the owner is told the
+ * liveness of each one. What the watchdog *does* with a reading is decided per tunnel in `runGuards`.
  *
  * Reads the tunnel's id, protocol and `onUnavailable`, and the interfaces its last plan recorded — and
  * nothing else. `resources`, `dns` and `config` are never read here.
@@ -187,23 +188,30 @@ export function guardedTunnels(
   document: ProfileDocument | null,
   readings: { interfaces: Map<string, string[]> },
 ): GuardedTunnel[] {
-  return (document?.tunnels ?? [])
-    .filter((tunnel) => tunnel.enabled && tunnel.role === 'resource')
-    .map((tunnel) => {
-      const subject = { tunnelId: tunnel.id, interfaces: readings.interfaces.get(tunnel.id) };
-      const entry = CATALOGUE[tunnel.protocol] as CatalogueEntry | undefined;
-      return {
-        tunnelId: tunnel.id,
-        onUnavailable: tunnel.onUnavailable,
-        selector: tunnel.onUnavailable === 'block' ? guardSelectorTag(tunnel.id) : fallThroughSelectorTag(tunnel.id),
-        dnsSelector: tunnel.onUnavailable === 'block' ? null : fallThroughDnsSelectorTag(tunnel.id),
-        method:
-          entry === undefined
-            ? { kind: 'none', why: `"${String(tunnel.protocol)}" is not in this build's catalogue` }
-            : entry.liveness(subject),
-        failsClosed: entry === undefined ? 'nothing is known about its outbound' : entry.failsClosed(subject),
-      };
-    });
+  if (document === null) return [];
+  const tunnels = new Map(document.tunnels.map((tunnel) => [tunnel.id, tunnel]));
+  return resourceCarriers(document).map((carrier) => {
+    /*
+     * A group is asked the way its members are — they are all VLESS today, whose liveness is read
+     * through the outbound — and through **its own selector**, so the reading is of whichever member it
+     * is on. Choosing that member is the group round's business; the guard asks only whether the group,
+     * as it stands, carries traffic.
+     */
+    const protocol = carrier.kind === 'tunnel' ? tunnels.get(carrier.id)!.protocol : 'vless';
+    const subject = { tunnelId: carrier.id, interfaces: readings.interfaces.get(carrier.id) };
+    const entry = CATALOGUE[protocol] as CatalogueEntry | undefined;
+    return {
+      tunnelId: carrier.id,
+      onUnavailable: carrier.onUnavailable,
+      selector: carrier.onUnavailable === 'block' ? guardSelectorTag(carrier.id) : fallThroughSelectorTag(carrier.id),
+      dnsSelector: carrier.onUnavailable === 'block' ? null : fallThroughDnsSelectorTag(carrier.id),
+      method:
+        entry === undefined
+          ? { kind: 'none', why: `"${String(protocol)}" is not in this build's catalogue` }
+          : entry.liveness(subject),
+      failsClosed: entry === undefined ? 'nothing is known about its outbound' : entry.failsClosed(subject),
+    };
+  });
 }
 
 /**
@@ -252,10 +260,23 @@ export interface GuardOutcome {
   fallingThrough?: { forSeconds: number } | null;
 }
 
+/** One group's choice this round. */
+export interface GroupOutcome {
+  id: string;
+  /** The member its selector is on after this round; `block` when none was healthy. */
+  selected: string | null;
+  changed: boolean;
+  reason: string;
+  members: TunnelHealth[];
+}
+
 export interface RoundOutcome {
   /** Null when the core could not be reached, which is not the same as nothing being healthy. */
   health: TunnelHealth[] | null;
+  /** What the main selector is on after this round: the egress, or the fallback. */
   selected: string | null;
+  /** Each group's choice, in profile order. */
+  groups?: GroupOutcome[];
   changed: boolean;
   reason: string;
   guards?: GuardOutcome[];
@@ -269,6 +290,8 @@ export function createWatchdog(deps: WatchdogDeps): {
   const failStreaks: Record<string, number> = {};
   /** What each tunnel was last seen as, so a transition can be recorded and a steady state cannot. */
   const lastHealthy: Record<string, boolean> = {};
+  /** Members this process has seen healthy at least once; only those are protected by stickiness. */
+  const everHealthy = new Set<string>();
   /** Consecutive dead readings per guarded tunnel, for the owner to read; nothing acts on them. */
   const guardStreaks: Record<string, number> = {};
   /** What each guarded tunnel last read as, so a transition is recorded and a steady state is not. */
@@ -683,20 +706,32 @@ export function createWatchdog(deps: WatchdogDeps): {
     }
 
     const policy = deps.policy();
-    const candidates = await deps.candidates();
-    if (candidates.length === 0) {
+    const { groups, egress } = await deps.selections();
+
+    // Each group's members as the running core has them: its selector's own list. A member the planner
+    // left out (`group_member_unusable`) is not in it, and is not measured.
+    const before = new Map((await deps.core.proxies()).map((entry) => [entry.name, entry]));
+    const sets = groups
+      .map((group) => {
+        const listed = new Set(before.get(group.id)?.all ?? []);
+        return { group, members: group.members.filter((id) => listed.has(id)) };
+      })
+      .filter((set) => before.has(set.group.id));
+    const egressTunnel = egress?.kind === 'tunnel' ? egress.id : null;
+
+    if (sets.every((set) => set.members.length === 0) && egressTunnel === null) {
       /*
-       * No failover group — but guarded destination tunnels still have to be judged.
+       * Nothing to choose among — but guarded destination tunnels still have to be judged.
        *
-       * This is the shape of a device that tunnels only named destinations and sends everything else
-       * direct, which has no `alternative` tunnels at all. Returning here without running the guards would
-       * leave every one of them permitting traffic forever, and the block-when-unavailable requirement
-       * would be silently inert on exactly the configuration that asks for it.
+       * The shape of a device that tunnels only named destinations and sends everything else direct.
+       * Returning here without running the guards would leave every one of them permitting traffic
+       * forever, and the block-when-unavailable requirement would be silently inert on exactly the
+       * configuration that asks for it.
        */
       const guardsOnly = await runGuards(await deps.core.proxies());
       return {
         health: [],
-        selected: null,
+        selected: before.get(deps.selector)?.now ?? null,
         changed: false,
         reason: 'no tunnel to probe',
         ...(guardsOnly.length > 0 ? { guards: guardsOnly } : {}),
@@ -704,30 +739,21 @@ export function createWatchdog(deps: WatchdogDeps): {
     }
 
     /*
-     * Probes are **sequential**, deliberately, and the round is bounded instead.
+     * Within a set, probes are **sequential**, and each set's round is bounded by the interval.
      *
-     * Concurrency is the obvious answer to a round that takes too long and it is the wrong one here: every
-     * probe leaves through the same uplink, so probing in parallel inflates the latency and jitter the
-     * probes are measuring. With thresholds this tight — 500 ms median, 250 ms mean deviation — the
-     * measurement would start failing tunnels because of the measurement. Sequential probes measure one
-     * path at a time, which is the only way the numbers mean what they say.
-     *
-     * The cost is that a slow round can outlast the interval. Rather than let the cadence stretch silently,
-     * the round **stops at the interval** and reports which candidates went unmeasured. Those are left
-     * `unknown` — absent from `health` entirely — so nothing decides on them, which is the same rule the
-     * confirmation window and the core-unavailable branch already follow. A slow round therefore degrades
-     * the watchdog's *coverage*, visibly, instead of degrading its *timing*, invisibly.
+     * Every probe leaves through the same uplink, so probing in parallel inflates the latency and jitter
+     * being measured, and with thresholds this tight the measurement would start failing tunnels because
+     * of the measurement. Sets — one per group, and the egress when it is a single tunnel — run side by
+     * side, a compromise made for schema 9: one group's dead member costs up to `count` timeouts, and run
+     * one after another a second group would routinely go unmeasured. Two or three probes in flight at once
+     * is the price. A member not reached within the interval is left `unknown` — absent from `health`,
+     * so nothing decides on it — and the round says so.
      */
     const budgetMs = Math.max(1000, policy.probes.intervalSeconds * 1000);
     const startedAt = performance.now();
     const unmeasured: string[] = [];
 
-    const health: TunnelHealth[] = [];
-    for (const outbound of candidates) {
-      if (performance.now() - startedAt >= budgetMs) {
-        unmeasured.push(outbound);
-        continue;
-      }
+    const probeOne = async (outbound: string): Promise<TunnelHealth> => {
       const latencies: number[] = [];
       for (let attempt = 0; attempt < policy.probes.count; attempt += 1) {
         // The endpoints are rotated across the probes of one round, so one endpoint being unreachable
@@ -737,20 +763,13 @@ export function createWatchdog(deps: WatchdogDeps): {
         if (ms !== null) latencies.push(ms);
       }
       const entry = summarise({ tunnelId: outbound, latenciesMs: latencies, attempted: policy.probes.count }, policy.probes);
-      health.push(entry);
-
       failStreaks[outbound] = entry.healthy ? 0 : (failStreaks[outbound] ?? 0) + 1;
+      if (entry.healthy) everHealthy.add(outbound);
 
       /*
-       * News only — and a tunnel that is broken the **first** time it is seen is news.
-       *
-       * The first version recorded only a change from a previous observation, which meant the very first
-       * round after a start logged nothing whatever it found: a device that booted with a dead tunnel
-       * reported it as silently as one where everything was fine, and the ring — the only record that
-       * survives a bad boot — held nothing about the thing that was wrong at boot.
-       *
-       * A first observation of a *healthy* tunnel is still not recorded. That is the expected state, and
-       * saying so on every start is how a ring fills with the absence of problems.
+       * News only — and a tunnel that is broken the **first** time it is seen is news. A first sighting
+       * of a healthy one is the expected state, and saying so on every start fills the ring with the
+       * absence of problems.
        */
       const firstSighting = lastHealthy[outbound] === undefined;
       const changed = !firstSighting && lastHealthy[outbound] !== entry.healthy;
@@ -765,16 +784,31 @@ export function createWatchdog(deps: WatchdogDeps): {
         });
       }
       lastHealthy[outbound] = entry.healthy;
-    }
+      return entry;
+    };
+    const probeSet = async (ids: string[]): Promise<TunnelHealth[]> => {
+      const out: TunnelHealth[] = [];
+      for (const id of ids) {
+        if (performance.now() - startedAt >= budgetMs) {
+          unmeasured.push(id);
+          continue;
+        }
+        out.push(await probeOne(id));
+      }
+      return out;
+    };
+
+    const measured = await Promise.all([
+      ...sets.map((set) => probeSet(set.members)),
+      probeSet(egressTunnel === null ? [] : [egressTunnel]),
+    ]);
+    const health = measured.flat();
 
     if (unmeasured.length > 0) {
       /*
-       * Recorded every round it happens, not only on a transition.
-       *
-       * Unlike a tunnel's health, this is not a state with a steady value worth suppressing: it says the
-       * watchdog did not manage to do its job this round, and a device where that is the *normal* condition
-       * is a device whose interval is set too short for its links. Seeing it repeatedly in the ring is the
-       * signal, so the repetition is the point.
+       * Recorded every round it happens: it says the watchdog did not manage to do its job this round, and
+       * a device where that is normal has an interval too short for its links. A streak is not advanced
+       * for a tunnel that was not measured — neither increment nor clear is evidence.
        */
       deps.record({
         level: 'warn',
@@ -785,24 +819,101 @@ export function createWatchdog(deps: WatchdogDeps): {
           'rather than judged',
         detail: { unmeasured, intervalSeconds: policy.probes.intervalSeconds, measured: health.map((e) => e.tunnelId) },
       });
+    }
+
+    /*
+     * Each group: stay on its member while it is healthy (sticky, with `failStreak`), otherwise the
+     * healthy member with the best score. No order is consulted — there is none: a group's members are
+     * whatever its feed offers. With nothing healthy the group's selector goes to `block`, and the main
+     * selector or the group's guard decides what that means for its traffic.
+     */
+    const groupOutcomes: GroupOutcome[] = [];
+    for (const [index, set] of sets.entries()) {
+      const members = measured[index] ?? [];
+      const current = before.get(set.group.id)?.now ?? null;
+      if (members.length === 0) {
+        groupOutcomes.push({ id: set.group.id, selected: current, changed: false, reason: 'no member was measured', members });
+        continue;
+      }
       /*
-       * A streak is not advanced for a tunnel that was not measured.
-       *
-       * Leaving it alone is what makes "unknown" mean unknown: incrementing would push an unmeasured tunnel
-       * towards being switched away from, and clearing would forgive real failures. Neither is evidence.
+       * Sticky protects a member that has worked, not merely the one the selector happens to be on. A
+       * core starts every group on its first member, and a feed's first member can be one that never
+       * answers: on the bench board the `claude` feed lists a REALITY node first (measured 2026-10-14),
+       * and holding it for `failStreak` rounds after every core restart would be a minute or more of
+       * Claude refused for nothing. So a member not yet seen healthy by this process has its streak
+       * treated as spent, and the first round moves the group to the best healthy one.
        */
+      const streaks =
+        current !== null && current !== 'block' && everHealthy.has(current) === false
+          ? { ...failStreaks, [current]: Math.max(failStreaks[current] ?? 0, policy.probes.failStreak) }
+          : failStreaks;
+      const decision = decideSelection({
+        priority: [],
+        excluded: [],
+        health: members,
+        current,
+        sticky: policy.sticky,
+        onAllDown: 'block',
+        failStreaks: streaks,
+        failStreak: policy.probes.failStreak,
+      });
+      if (!decision.change) {
+        groupOutcomes.push({ id: set.group.id, selected: current, changed: false, reason: decision.reason, members });
+        continue;
+      }
+      const switched = await deps.core.select(set.group.id, decision.select);
+      if (!switched.ok) {
+        deps.record({
+          level: 'error',
+          kind: 'health.switch-failed',
+          summary: `could not point group ${set.group.id} at ${decision.select}: ${switched.message}`,
+          detail: { group: set.group.id, from: current, to: decision.select, reason: decision.reason, considered: decision.considered },
+        });
+        groupOutcomes.push({ id: set.group.id, selected: current, changed: false, reason: `the switch failed: ${switched.message}`, members });
+        continue;
+      }
+      deps.record({
+        level: 'warn',
+        kind: 'health.switched',
+        summary: `group ${set.group.id} moved from ${current ?? 'nothing'} to ${decision.select}: ${decision.reason}`,
+        detail: { group: set.group.id, from: current, to: decision.select, reason: decision.reason, considered: decision.considered },
+      });
+      deps.log('warn', { group: set.group.id, from: current, to: decision.select }, decision.reason);
+      groupOutcomes.push({ id: set.group.id, selected: decision.select, changed: true, reason: decision.reason, members });
     }
 
     // Read back rather than remembered. See the note at the top.
     const proxies = await deps.core.proxies();
     const guardOutcomes = await runGuards(proxies);
-    const selector = proxies.find((entry) => entry.name === deps.selector);
-    const current = selector?.now ?? null;
+    const current = proxies.find((entry) => entry.name === deps.selector)?.now ?? null;
+
+    if (egress === null) {
+      return { health, selected: current, changed: false, reason: 'there is no egress', guards: guardOutcomes, groups: groupOutcomes };
+    }
+
+    /*
+     * The main selector holds the egress and the fallback, and nothing else (`generate/core-config.ts`).
+     * A group egress counts as healthy while any of its members is; a tunnel egress is its own reading.
+     * The same sticky rule applies, so one bad round never sends everything to the fallback.
+     */
+    const egressHealth: TunnelHealth | undefined =
+      egress.kind === 'tunnel'
+        ? health.find((entry) => entry.tunnelId === egress.id)
+        : (() => {
+            const members = groupOutcomes.find((outcome) => outcome.id === egress.id)?.members ?? [];
+            if (members.length === 0) return undefined;
+            const best = [...members].sort((a, b) => score(a) - score(b))[0]!;
+            return { ...best, tunnelId: egress.id, healthy: members.some((entry) => entry.healthy) };
+          })();
+    if (egressHealth === undefined) {
+      return { health, selected: current, changed: false, reason: `the egress ${egress.id} was not measured`, guards: guardOutcomes, groups: groupOutcomes };
+    }
+    if (egress.kind === 'group') failStreaks[egress.id] = egressHealth.healthy ? 0 : (failStreaks[egress.id] ?? 0) + 1;
 
     const decision = decideSelection({
-      priority: policy.priority,
-      excluded: policy.excluded,
-      health,
+      priority: [egress.id],
+      excluded: [],
+      health: [egressHealth],
       current,
       sticky: policy.sticky,
       onAllDown: policy.onAllDown,
@@ -811,7 +922,7 @@ export function createWatchdog(deps: WatchdogDeps): {
     });
 
     if (!decision.change) {
-      return { health, selected: current, changed: false, reason: decision.reason, guards: guardOutcomes };
+      return { health, selected: current, changed: false, reason: decision.reason, guards: guardOutcomes, groups: groupOutcomes };
     }
 
     const result = await deps.core.select(deps.selector, decision.select);
@@ -822,13 +933,7 @@ export function createWatchdog(deps: WatchdogDeps): {
         summary: `could not point the selector at ${decision.select}: ${result.message}`,
         detail: { from: current, to: decision.select, reason: decision.reason, considered: decision.considered },
       });
-      return {
-        health,
-        selected: current,
-        changed: false,
-        reason: `the switch failed: ${result.message}`,
-        guards: guardOutcomes,
-      };
+      return { health, selected: current, changed: false, reason: `the switch failed: ${result.message}`, guards: guardOutcomes, groups: groupOutcomes };
     }
 
     deps.record({
@@ -840,7 +945,7 @@ export function createWatchdog(deps: WatchdogDeps): {
     });
     deps.log('warn', { from: current, to: decision.select }, decision.reason);
 
-    return { health, selected: decision.select, changed: true, reason: decision.reason, guards: guardOutcomes };
+    return { health, selected: decision.select, changed: true, reason: decision.reason, guards: guardOutcomes, groups: groupOutcomes };
   };
 
   return {
@@ -966,11 +1071,19 @@ export function watchdogReading(outcome: RoundOutcome | null): {
       problem: `nothing could be measured: ${outcome.reason}`,
     };
   }
-  const items: ObserverItem[] = outcome.health.map((entry) => ({
-    subject: entry.tunnelId,
-    state: entry.healthy ? 'healthy' : 'unhealthy',
-    note: `failover member${outcome.selected === entry.tunnelId ? ', selected' : ''}`,
-  }));
+  const groupOfMember = new Map<string, GroupOutcome>();
+  for (const group of outcome.groups ?? []) for (const member of group.members) groupOfMember.set(member.tunnelId, group);
+  const items: ObserverItem[] = outcome.health.map((entry) => {
+    const group = groupOfMember.get(entry.tunnelId);
+    return {
+      subject: entry.tunnelId,
+      state: entry.healthy ? 'healthy' : 'unhealthy',
+      note:
+        group !== undefined
+          ? `member of ${group.id}${group.selected === entry.tunnelId ? ', selected' : ''}`
+          : `egress${outcome.selected === entry.tunnelId ? ', selected' : ''}`,
+    };
+  });
   const guards = outcome.guards ?? [];
   const standing = (guard: GuardOutcome): string =>
     guard.blocked === true
@@ -999,11 +1112,12 @@ export function watchdogReading(outcome: RoundOutcome | null): {
       ...(isFalling(guard) ? { fallingThroughSeconds: guard.fallingThrough!.forSeconds } : {}),
     });
   }
-  const failover =
-    outcome.health.length > 0
-      ? `failover ${String(outcome.health.filter((entry) => entry.healthy).length)} of ${String(outcome.health.length)} healthy, ` +
-        `selected ${outcome.selected ?? 'nothing'}`
-      : 'no failover group';
+  const groupParts = (outcome.groups ?? []).map(
+    (group) =>
+      `${group.id}: ${String(group.members.filter((entry) => entry.healthy).length)} of ${String(group.members.length)} healthy, ` +
+      `selected ${group.selected ?? 'nothing'}`,
+  );
+  const failover = [...groupParts, `egress on ${outcome.selected ?? 'nothing'}`].join('; ');
   const guardSummary =
     guards.length === 0
       ? 'no guards'

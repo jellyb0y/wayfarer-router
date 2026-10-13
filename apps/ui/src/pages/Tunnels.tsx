@@ -61,7 +61,7 @@ import {
   TunnelEditor,
   type Tunnel,
 } from '../components/tunnel/index.tsx';
-import { Subscriptions } from '../components/tunnel/subscriptions.tsx';
+import { Groups } from '../components/tunnel/groups.tsx';
 
 export function Tunnels(): ReactElement {
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: profileApi.list });
@@ -84,11 +84,11 @@ export function Tunnels(): ReactElement {
       <TunnelListCard document={document} running={target.isActive} />
 
       {/*
-        * Where the tunnels above come from, directly under them. Not the same act as the VLESS
-        * editor's "fill from a link": that parses one link into one tunnel once, and this is stored
-        * and re-read, rewriting the tunnels it owns on every refresh. The two never share a word.
+        * The groups, directly under the tunnels: a subscription's nodes, chosen among by the device.
+        * Not the same act as the VLESS editor's "fill from a link", which parses one link into one
+        * tunnel once; a group is re-read, and its members are whatever the feed offers now.
         */}
-      <Subscriptions document={document} />
+      <Groups document={document} />
 
       {/*
         * The device-wide half of the same question, directly under the list it is about. Its own
@@ -203,7 +203,7 @@ function TunnelListCard({ document, running }: { document: Record<string, unknow
             <dl className="row-fields">
               <div className="row-field">
                 <dt>{t('tunnels.carries')}</dt>
-                <dd>{tunnel['role'] === 'resource' ? t('tunnels.roleResource') : t('tunnels.roleAlternative')}</dd>
+                <dd>{tunnel['resources'] === undefined ? t('tunnels.roleAlternative') : t('tunnels.roleResource')}</dd>
               </div>
               <div className="row-field">
                 <dt>{t('tunnels.state')}</dt>
@@ -213,17 +213,6 @@ function TunnelListCard({ document, running }: { document: Record<string, unknow
                 <dt>{t('tunnels.health')}</dt>
                 <dd>{healthOf(tunnel['id'])}</dd>
               </div>
-              {tunnel['derivedFrom'] === undefined ? null : (
-                <div className="row-field">
-                  <dt>{t('tunnels.from')}</dt>
-                  {/*
-                    * Stated on the row rather than only inside the editor: a refresh of that
-                    * subscription replaces this tunnel, so an edit made here is an edit with an expiry
-                    * date, and somebody about to make one should know before they open it.
-                    */}
-                  <dd>{t('tunnels.fromSubscription')}</dd>
-                </div>
-              )}
             </dl>
 
             {fallingSince(tunnel['id']) === null ? null : (

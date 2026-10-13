@@ -14,6 +14,7 @@
  */
 
 import type { ProfileDocument } from './profile.ts';
+import { egressOf, resourceCarriers } from './groups.ts';
 
 /** Tags the core uses that are not tunnel ids. */
 export const CORE_TAGS = {
@@ -466,10 +467,10 @@ export function generateRoutingRules(profile: ProfileDocument, context: RoutingC
 
       case 'tunnel-resources': {
         let emitted = 0;
-        for (const tunnel of profile.tunnels) {
-          if (!tunnel.enabled || tunnel.role !== 'resource') continue;
+        // Tunnels and groups alike: a group with resources is reached through its own selector, which is
+        // tagged with the group's id, exactly as a tunnel's outbound is tagged with the tunnel's.
+        for (const tunnel of resourceCarriers(profile)) {
           const resources = tunnel.resources;
-          if (!resources) continue;
           const matcher: Record<string, unknown> = {};
           const parts: string[] = [];
           if (resources.domainSuffix?.length) {
@@ -517,7 +518,7 @@ export function generateRoutingRules(profile: ProfileDocument, context: RoutingC
           output.push({
             rule: null,
             fromIndex: index,
-            summary: 'Nothing — no enabled resource tunnel declares any resources.',
+            summary: 'Nothing — no enabled tunnel or group declares any resources.',
           });
         }
         break;
@@ -570,23 +571,21 @@ export function generateRoutingRules(profile: ProfileDocument, context: RoutingC
 
 /** Where unmatched traffic goes, which is the last thing the preview should say. */
 export function describeFinal(profile: ProfileDocument): string {
-  const alternatives = profile.tunnels.filter(
-    (tunnel) => tunnel.enabled && tunnel.role === 'alternative' && !profile.policy.excluded.includes(tunnel.id),
-  );
-  if (alternatives.length === 0) {
+  const egress = egressOf(profile);
+  if (egress === null) {
     return profile.policy.onAllDown === 'direct'
-      ? 'Everything else goes direct — there is no alternative tunnel enabled.'
-      : 'Everything else is blocked — there is no alternative tunnel enabled, and the policy is to block.';
+      ? 'Everything else goes direct — there is no egress.'
+      : 'Everything else is blocked — there is no egress, and the policy is to block.';
   }
-  return `Everything else goes to whichever alternative is selected (${alternatives.map((t) => t.id).join(', ')}).`;
+  return egress.kind === 'group'
+    ? `Everything else goes to group ${egress.name} (${egress.id}), through whichever of its members is selected.`
+    : `Everything else goes to ${egress.name} (${egress.id}).`;
 }
 
 /** Where `route.final` sends traffic, in a few words, for the fall-through preview. */
 function describeFinalShort(profile: ProfileDocument): string {
-  const alternatives = (profile.tunnels ?? []).filter(
-    (tunnel) => tunnel.enabled && tunnel.role === 'alternative' && !(profile.policy?.excluded ?? []).includes(tunnel.id),
-  );
-  if (alternatives.length > 0) return 'whichever alternative tunnel is selected';
+  const egress = egressOf(profile);
+  if (egress !== null) return `the egress, ${egress.name}`;
   return profile.policy?.onAllDown === 'direct' ? 'on this profile, direct' : 'on this profile, blocked';
 }
 

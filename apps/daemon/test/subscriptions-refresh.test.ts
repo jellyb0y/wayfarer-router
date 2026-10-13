@@ -1,317 +1,104 @@
 /**
- * Refreshing a subscription — the one path where the device edits its own configuration unasked.
+ * Refreshing a group: its members become what its subscription offers.
  *
- * Every test here is about what an unattended edit is **not** allowed to do.
+ * Since schema 9 there are no guesses left to test — no kept, re-pointed or disabled node — only that the
+ * members follow the feed, that a member keeps its id and place while the feed keeps it, and that nothing
+ * outside the group moves.
  */
 
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
-import { emptyProfile, type ProfileDocument, type Tunnel } from '@wayfarer/schemas';
+import { emptyProfile, type Group, type ProfileDocument } from '@wayfarer/schemas';
 import type { ParsedNode } from '@wayfarer/protocols';
-import { refreshMayApply, refreshSubscription } from '../src/core/subscriptions.ts';
+import { refreshGroup, refreshMayApply } from '../src/core/subscriptions.ts';
 
-function node(server: string, port: number, label: string): ParsedNode {
-  return {
-    scheme: 'vless',
-    label,
-    protocol: 'vless',
-    config: { server, port, id: 'u', network: 'tcp', security: 'tls' },
-  };
+function node(server: string, label: string, id = 'u'): ParsedNode {
+  return { scheme: 'vless', label, protocol: 'vless', config: { server, port: 443, id, network: 'tcp', security: 'tls' } };
 }
 
-/**
- * The caller's job: naming, and placing a parsed node into a tunnel.
- *
- * Deliberately simple here. `refreshSubscription` takes this as a parameter precisely so that naming is
- * somebody else's decision and these tests are about the refresh rules alone. Since E5 the translation
- * from a link to a catalogue configuration happens in the parser, so what arrives here is already a
- * `VlessConfig` — the caller decides the id, the name and the role, and nothing else.
- */
-const toTunnel = (parsed: ParsedNode, existing: Tunnel | undefined): Tunnel => {
-  // The narrowing is the point of the union: the protocol and the configuration travel together, so a
-  // caller reading a VLESS field must first establish that it has a VLESS node. Every node these tests
-  // make is one; a future catalogue entry that arrives from a link gets its own arm here.
-  if (parsed.protocol !== 'vless') assert.fail(`this fixture only makes vless nodes, got ${parsed.protocol}`);
-  return {
-    id: existing?.id ?? `sub-${parsed.config.server}`.replace(/[^a-z0-9-]/g, '-'),
-    name: parsed.label ?? 'unnamed',
-    role: 'alternative',
-    onUnavailable: 'block' as const,
-    enabled: true,
-    protocol: parsed.protocol,
-    config: parsed.config,
-  };
-};
+const member = (id: string, server: string, account = 'u'): Group['members'][number] => ({
+  id,
+  name: id,
+  node: `vless://${server}:443`,
+  protocol: 'vless',
+  config: { server, port: 443, id: { $secret: account } as never, network: 'tcp', security: 'tls' },
+});
 
-function documentWith(
-  tunnels: Tunnel[],
-  policy?: { priority?: string[]; excluded?: string[] },
-  /**
-   * Routing rules. Defaulted to empty here, and **that default is why this path had no coverage**: no
-   * fixture ever set it, so every test asserted against a document whose rules referenced nothing.
-   */
-  rules?: unknown[],
-): ProfileDocument {
-  const base = emptyProfile({ name: 'Bench' }) as unknown as ProfileDocument;
+function documentWith(members: Group['members'], extra: Partial<ProfileDocument> = {}): ProfileDocument {
+  const base = emptyProfile({ name: 'Bench' });
   return {
     ...base,
-    tunnels,
-    policy: { ...base.policy, priority: policy?.priority ?? [], excluded: policy?.excluded ?? [] },
-    routing: { ...base.routing, rules: (rules ?? []) as never },
+    groups: [{ id: 'feed', name: 'Feed', enabled: true, url: 'https://feed.example/sub', refreshHours: 1, onUnavailable: 'block', members }],
+    policy: { ...base.policy, egress: 'feed' },
+    ...extra,
   };
 }
 
-const derived = (id: string, identity: string, name = id): Tunnel => ({
-  id,
-  name,
-  role: 'alternative', onUnavailable: 'block' as const,
-  enabled: true,
-  protocol: 'vless',
-  config: {
-    server: identity.split('://')[1]?.split(':')[0] ?? 'x',
-    port: 443,
-    id: 'u',
-    network: 'tcp',
-    security: 'tls',
-  },
-  derivedFrom: { subscription: 'feed', node: identity },
+test('a node the feed dropped leaves the group, and nothing else is touched', () => {
+  const before = documentWith([member('de', 'de.example'), member('fr', 'fr.example')]);
+  const result = refreshGroup({ document: before, groupId: 'feed', nodes: [node('de.example', 'DE')] });
+  assert.deepEqual(result.removed, ['fr']);
+  assert.deepEqual(result.document.groups[0]!.members.map((entry) => entry.id), ['de']);
+  // The egress names the group, not a member, so it never needs to follow a refresh.
+  assert.deepEqual(result.document.policy, before.policy);
+  assert.deepEqual(result.document.tunnels, before.tunnels);
 });
 
-test('a hand-authored tunnel is never touched, whatever the feed says', () => {
-  const byHand: Tunnel = {
-    id: 'hq',
-    name: 'HQ',
-    role: 'alternative', onUnavailable: 'block' as const,
-    enabled: true,
-    protocol: 'openvpn',
-    config: { profile: 'client\ndev tun\n' },
-  };
-  const result = refreshSubscription({
-    document: documentWith([byHand]),
-    subscriptionId: 'feed',
-    nodes: [node('a.example', 443, 'A')],
-    toTunnel,
-  });
-
-  const kept = result.document.tunnels.find((tunnel) => tunnel.id === 'hq');
-  assert.deepEqual(
-    kept,
-    byHand,
-    'a refresh that can alter a tunnel nobody derived is a refresh that deletes somebody work while ' +
-      'they are asleep',
-  );
-  assert.deepEqual(result.leftAlone, ['hq']);
+test('a new node joins at the end with a fresh id, and is a member at once — not a disabled extra', () => {
+  const before = documentWith([member('de', 'de.example')]);
+  const result = refreshGroup({ document: before, groupId: 'feed', nodes: [node('new.example', '🇵🇱 Poland · Warsaw'), node('de.example', 'DE')] });
+  assert.deepEqual(result.added, ['feed-1']);
+  const members = result.document.groups[0]!.members;
+  assert.deepEqual(members.map((entry) => entry.id), ['de', 'feed-1'], 'the existing member keeps its place, and with it its port');
+  assert.equal(members[1]!.name, '🇵🇱 Poland · Warsaw');
+  assert.equal(members[1]!.node, 'vless://new.example:443');
 });
 
-test('a tunnel derived from a different subscription is left alone too', () => {
-  const other = derived('other-feed-node', 'vless://b.example:443', 'Other');
-  other.derivedFrom = { subscription: 'a-different-feed', node: 'vless://b.example:443' };
-  const result = refreshSubscription({
-    document: documentWith([other]),
-    subscriptionId: 'feed',
-    nodes: [],
-    toTunnel,
+test('a fresh id avoids every id in the document: tunnels, groups and members', () => {
+  const before = documentWith([member('feed-1', 'one.example')], {
+    tunnels: [{ id: 'feed-2', name: 'Hand', enabled: true, onUnavailable: 'block', protocol: 'openvpn', config: { profile: 'client\n' } } as never],
   });
-  assert.ok(result.document.tunnels.some((tunnel) => tunnel.id === 'other-feed-node'));
+  const result = refreshGroup({ document: before, groupId: 'feed', nodes: [node('one.example', 'One'), node('two.example', 'Two')] });
+  assert.deepEqual(result.added, ['feed-3']);
+});
+
+test('a renamed node is an update in place, matched by its endpoint rather than its label', () => {
+  const before = documentWith([member('de', 'de.example')]);
+  const result = refreshGroup({ document: before, groupId: 'feed', nodes: [node('de.example', 'Germany · Frankfurt')] });
+  assert.deepEqual(result.updated, ['de']);
+  assert.deepEqual(result.added, []);
   assert.deepEqual(result.removed, []);
+  assert.equal(result.document.groups[0]!.members[0]!.name, 'Germany · Frankfurt');
 });
 
-test('a node the feed dropped is removed when nothing references it', () => {
-  const gone = derived('gone', 'vless://old.example:443');
-  const result = refreshSubscription({
-    document: documentWith([gone]),
-    subscriptionId: 'feed',
-    nodes: [node('new.example', 443, 'New')],
-    toTunnel,
-  });
-  assert.deepEqual(result.removed, ['gone']);
-  assert.equal(result.document.tunnels.some((tunnel) => tunnel.id === 'gone'), false);
+test('an unchanged node is not an update, though the stored credential is wrapped and the parsed one is not', () => {
+  const before = documentWith([{ ...member('de', 'de.example'), name: 'DE' }]);
+  const result = refreshGroup({ document: before, groupId: 'feed', nodes: [node('de.example', 'DE')] });
+  assert.deepEqual(result.updated, [], 'every refresh would otherwise restart the core for nothing');
 });
 
-test('a node the feed dropped moves to a free node when policy names it, keeping its id and place', () => {
-  // The bench board on 2026-10-13: the provider withdrew the node behind `france` and offered another.
-  const referenced = derived('chosen', 'vless://old.example:443', 'The one they picked');
-  const before = documentWith([referenced], { priority: ['chosen'] });
-  const result = refreshSubscription({
-    document: before,
-    subscriptionId: 'feed',
-    nodes: [node('new.example', 443, 'A substitute')],
-    toTunnel,
-  });
-
-  assert.deepEqual(result.repointed, [{ id: 'chosen', from: 'vless://old.example:443', to: 'vless://new.example:443' }]);
-  assert.deepEqual(result.added, [], 'the free node went to the tunnel that needed it, not to a new one');
-  const moved = result.document.tunnels.find((tunnel) => tunnel.id === 'chosen')!;
-  assert.equal((moved.config as { server: string }).server, 'new.example');
-  assert.equal(moved.name, 'A substitute', 'the name says where it now leads');
-  assert.deepEqual(moved.derivedFrom, { subscription: 'feed', node: 'vless://new.example:443' });
-  assert.deepEqual(result.document.policy.priority, ['chosen'], 'the policy follows the id; it is not edited');
+test('a changed credential is an update', () => {
+  const before = documentWith([{ ...member('de', 'de.example', 'old'), name: 'DE' }]);
+  const result = refreshGroup({ document: before, groupId: 'feed', nodes: [node('de.example', 'DE', 'new')] });
+  assert.deepEqual(result.updated, ['de']);
 });
 
-test('with no free node, a dropped node policy names is kept as it was', () => {
-  const result = refreshSubscription({
-    document: documentWith([derived('a', 'vless://a.example:443'), derived('b', 'vless://gone.example:443')], { priority: ['a', 'b'] }),
-    subscriptionId: 'feed',
-    nodes: [node('a.example', 443, 'A')],
-    toTunnel,
-  });
-  assert.deepEqual(result.repointed, []);
-  assert.deepEqual(result.keptBecauseReferenced, ['b']);
-  assert.equal((result.document.tunnels.find((tunnel) => tunnel.id === 'b')!.config as { server: string }).server, 'gone.example');
+test('another group is left exactly as it was', () => {
+  const before = documentWith([member('de', 'de.example')]);
+  const other: Group = { id: 'other', name: 'Other', enabled: true, url: 'https://other.example/sub', refreshHours: 1, onUnavailable: 'block', members: [member('o1', 'o.example')] };
+  const document = { ...before, groups: [...before.groups, other] };
+  const result = refreshGroup({ document, groupId: 'feed', nodes: [] });
+  assert.deepEqual(result.document.groups[1], other);
 });
 
-test('a free node of the same country is preferred, and no node is given twice', () => {
-  const result = refreshSubscription({
-    document: documentWith(
-      [derived('fr', 'vless://fr-old.example:443', 'France · Paris'), derived('nl', 'vless://nl-old.example:443', 'Netherlands')],
-      { priority: ['fr', 'nl'] },
-    ),
-    subscriptionId: 'feed',
-    nodes: [node('de.example', 443, '🇩🇪 Germany · Frankfurt'), node('fr.example', 443, '🇫🇷 France · Lyon')],
-    toTunnel,
-  });
-  assert.deepEqual(
-    result.repointed.map((move) => [move.id, move.to]),
-    [
-      ['fr', 'vless://fr.example:443'],
-      ['nl', 'vless://de.example:443'],
-    ],
-  );
-});
-
-test('an excluded node counts as referenced: policy names it in either list', () => {
-  const result = refreshSubscription({
-    document: documentWith([derived('parked', 'vless://old.example:443')], { excluded: ['parked'] }),
-    subscriptionId: 'feed',
-    nodes: [],
-    toTunnel,
-  });
-  assert.deepEqual(result.keptBecauseReferenced, ['parked']);
-});
-
-test('a renamed node is an update, not a delete and an add', () => {
-  // Identity is server, port and protocol. A provider renaming a node must not break policy that
-  // named the old id.
-  const existing = derived('stable-id', 'vless://a.example:443', 'Old name');
-  const result = refreshSubscription({
-    document: documentWith([existing], { priority: ['stable-id'] }),
-    subscriptionId: 'feed',
-    nodes: [node('a.example', 443, 'Brand new marketing name')],
-    toTunnel,
-  });
-  assert.deepEqual(result.added, [], 'a rename must not look like an arrival');
-  assert.deepEqual(result.removed, []);
-  assert.ok(result.document.tunnels.some((tunnel) => tunnel.id === 'stable-id'), 'the id survives the rename');
-});
-
-test('policy is never edited by a refresh, in any direction', () => {
-  const before = documentWith([derived('a', 'vless://a.example:443')], {
-    priority: ['a', 'something-else'],
-    excluded: ['parked'],
-  });
-  const result = refreshSubscription({
-    document: before,
-    subscriptionId: 'feed',
-    nodes: [node('a.example', 443, 'A'), node('b.example', 443, 'B')],
-    toTunnel,
-  });
-  assert.deepEqual(result.document.policy, before.policy, 'a feed may supply exits, not choose between them');
-});
-
-test('the derived mark survives every refresh', () => {
-  const result = refreshSubscription({
-    document: documentWith([]),
-    subscriptionId: 'feed',
-    nodes: [node('a.example', 443, 'A')],
-    toTunnel,
-  });
-  const fresh = result.document.tunnels[0]!;
-  assert.deepEqual(fresh.derivedFrom, { subscription: 'feed', node: 'vless://a.example:443' });
+test('a feed listing one node twice is one member', () => {
+  const result = refreshGroup({ document: documentWith([]), groupId: 'feed', nodes: [node('a.example', 'A'), node('a.example', 'A again')] });
+  assert.equal(result.document.groups[0]!.members.length, 1);
 });
 
 test('a timer may apply a service change and must stop at a network one', () => {
   assert.equal(refreshMayApply('hot'), true);
   assert.equal(refreshMayApply('service'), true);
-  // There is nobody at four in the morning to say "yes, I can still reach this", and an unconfirmed
-  // network change reverts three minutes later — so a timer that applied one would take the device
-  // down and put it back, repeatedly.
   assert.equal(refreshMayApply('network'), false);
   assert.equal(refreshMayApply('boot'), false);
-});
-
-/* ── a routing rule is a reference too ───────────────────────────────────────────────────── */
-
-test('a node a routing rule still names is kept, exactly as a policy reference is', () => {
-  /*
-   * The combination this prevents is the worst available: the tunnel is deleted, the cross-reference
-   * invariant then raises an error, the plan becomes unusable, and the subscription is stuck — with the
-   * tunnel already gone. An irreversible deletion followed by a refusal to proceed.
-   */
-  const referenced = derived('chosen', 'vless://old.example:443', 'Named by a rule');
-  const before = documentWith([referenced], {}, [
-    { kind: 'domain', domains: ['intranet.example'], action: { outbound: 'chosen' } },
-  ]);
-
-  const result = refreshSubscription({
-    document: before,
-    subscriptionId: 'feed',
-    nodes: [node('new.example', 443, 'A substitute')],
-    toTunnel,
-  });
-
-  assert.deepEqual(result.removed, []);
-  assert.deepEqual(result.repointed.map((move) => move.id), ['chosen'], 'a rule reference protects it exactly as policy does');
-});
-
-test('a reference from any rule kind counts, because the field is what names a tunnel', () => {
-  // Read off `action.outbound` wherever it appears rather than from a list of kinds that have one: such
-  // a list is a second description of the schema and stops covering a kind added later.
-  for (const rule of [
-    { kind: 'private', action: { outbound: 'chosen' } },
-    { kind: 'ruleSet', sets: ['ads'], action: { outbound: 'chosen' } },
-    { kind: 'domain', domains: ['x.example'], action: { outbound: 'chosen' } },
-  ]) {
-    const result = refreshSubscription({
-      document: documentWith([derived('chosen', 'vless://old.example:443')], {}, [rule]),
-      subscriptionId: 'feed',
-      nodes: [],
-      toTunnel,
-    });
-    assert.deepEqual(result.keptBecauseReferenced, ['chosen'], `rule kind ${rule.kind} should count`);
-  }
-});
-
-test('a rule naming something else does not protect an unrelated node', () => {
-  const result = refreshSubscription({
-    document: documentWith([derived('gone', 'vless://old.example:443')], {}, [
-      { kind: 'domain', domains: ['x.example'], action: { outbound: 'direct' } },
-    ]),
-    subscriptionId: 'feed',
-    nodes: [],
-    toTunnel,
-  });
-  assert.deepEqual(result.removed, ['gone'], 'nothing references it, so it goes');
-});
-
-test('every tunnel keeps its place, and a new node goes at the end', () => {
-  // Order decides loopback ports (`core/emit.ts`); the bench board on 2026-10-14 had derived tunnels
-  // first and hand-authored ones after, and a refresh that moved them moved every port behind them.
-  const byHand: Tunnel = {
-    id: 'hq',
-    name: 'HQ',
-    role: 'alternative', onUnavailable: 'block' as const,
-    enabled: true,
-    protocol: 'openvpn',
-    config: { profile: 'client\ndev tun\n' },
-  };
-  const result = refreshSubscription({
-    document: documentWith([derived('de', 'vless://de.example:443'), derived('fr', 'vless://fr.example:443'), byHand], { priority: ['de', 'fr'] }),
-    subscriptionId: 'feed',
-    nodes: [node('new.example', 443, 'New'), node('de.example', 443, 'DE'), node('spare.example', 443, 'Spare')],
-    toTunnel,
-  });
-  // `fr` lost its node and takes the first free one in its own place; the other free one is appended.
-  assert.deepEqual(result.document.tunnels.map((tunnel) => tunnel.id), ['de', 'fr', 'hq', 'sub-spare-example']);
-  assert.deepEqual(result.repointed.map((move) => move.id), ['fr']);
-  assert.deepEqual(result.updated, []);
 });

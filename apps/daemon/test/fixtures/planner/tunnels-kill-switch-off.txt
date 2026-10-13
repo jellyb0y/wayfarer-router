@@ -17,6 +17,7 @@
 
 ## notes
 - "Warsaw": Carried by the proxy core itself, because every field in this configuration is one its VLESS outbound defines. No second process runs.
+- "Feed node": Carried by the proxy core itself, because every field in this configuration is one its VLESS outbound defines. No second process runs.
 - Access-point control uses the socket at /run/wayfarer/hostapd. Running hostapd_cli by hand needs `-p /run/wayfarer/hostapd`, or it reports a working access point as absent.
 - The access point requests channel 36. hostapd may come up on a different primary channel within the same block: it scans for neighbours first and swaps the primary and secondary channels to put the secondary where it heard none. The status view reports the channel actually in use, which is the one to trust.
 
@@ -291,11 +292,31 @@ purpose: the proxy core configuration
       "tag": "res-hq"
     },
     {
+      "type": "vless",
+      "server": "198.51.100.11",
+      "server_port": 443,
+      "uuid": "a-placeholder-account",
+      "tls": {
+        "enabled": true,
+        "server_name": "198.51.100.11"
+      },
+      "tag": "feed-1"
+    },
+    {
+      "type": "selector",
+      "tag": "feed",
+      "outbounds": [
+        "feed-1",
+        "block"
+      ],
+      "default": "feed-1",
+      "interrupt_exist_connections": false
+    },
+    {
       "type": "selector",
       "tag": "wf-selector",
       "outbounds": [
         "alt-b",
-        "alt-a",
         "block"
       ],
       "default": "alt-b",
@@ -317,6 +338,16 @@ purpose: the proxy core configuration
         "block"
       ],
       "default": "res-hq",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "wf-guard-feed",
+      "outbounds": [
+        "feed",
+        "block"
+      ],
+      "default": "feed",
       "interrupt_exist_connections": true
     }
   ],
@@ -373,6 +404,12 @@ purpose: the proxy core configuration
           "10.0.0.0/8"
         ],
         "outbound": "wf-guard-res-hq"
+      },
+      {
+        "domain_suffix": [
+          ".feed.example"
+        ],
+        "outbound": "wf-guard-feed"
       },
       {
         "domain": [

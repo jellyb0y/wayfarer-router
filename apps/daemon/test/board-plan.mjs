@@ -115,7 +115,6 @@ const profile = {
     {
       id: 'alt-a',
       name: 'Alternative A',
-      role: 'alternative',
       enabled: true,
       protocol: 'vless',
       config: {
@@ -130,7 +129,6 @@ const profile = {
     {
       id: 'res-hq',
       name: 'Resource',
-      role: 'resource',
       enabled: true,
       protocol: 'openvpn',
       config: { profile: { $secret: 'client\nremote 198.51.100.9 1194 udp\n' }, interfaceSuffix: 'hq' },

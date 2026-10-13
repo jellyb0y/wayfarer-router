@@ -40,7 +40,6 @@ function benchProfile(dynamic = true): ProfileDocument {
       {
         id: 'hq',
         name: 'HQ',
-        role: 'resource',
         enabled: true,
         protocol: 'openvpn',
         onUnavailable: 'block',

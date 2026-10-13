@@ -34,7 +34,6 @@ function hqProfile(): ProfileDocument {
       {
         id: 'hq',
         name: 'HQ',
-        role: 'resource',
         onUnavailable: 'block',
         enabled: true,
         protocol: 'openvpn',

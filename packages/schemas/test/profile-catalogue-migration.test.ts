@@ -209,7 +209,8 @@ test('OpenVPN: the profile and everything routing owns are carried unchanged', (
   assert.deepEqual(atSeven['probe'], { endpoints: ['http://198.51.100.9/'] });
   assert.equal('probe' in partner, false);
   assert.equal(partner['onUnavailable'], 'block');
-  assert.equal(partner['role'], 'resource');
+  // `role` is carried by 6 → 7 and removed by 8 → 9 (schema 9: having resources is what a resource is).
+  assert.equal('role' in partner, false);
 });
 
 test('Cloak + OpenVPN: one transport becomes one entry point, and the credential becomes a marked field', () => {

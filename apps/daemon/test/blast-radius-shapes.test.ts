@@ -38,16 +38,16 @@ import { builtInAndDongle, cleanFacts } from './helpers/synthetic-inventory.ts';
 const now = (): string => '2026-09-22T19:00:00.000Z';
 
 const RELAY = {
-  id: 'relay', name: 'Relay', role: 'alternative', onUnavailable: 'block', enabled: true, protocol: 'vless',
+  id: 'relay', name: 'Relay', onUnavailable: 'block', enabled: true, protocol: 'vless',
   config: { server: '198.51.100.7', port: 443, id: 'a-placeholder-account', network: 'tcp', security: 'tls' },
 };
 const RUSSIA = {
-  id: 'russia', name: 'Russia', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'vless',
+  id: 'russia', name: 'Russia', onUnavailable: 'block', enabled: true, protocol: 'vless',
   config: { server: '198.51.100.9', port: 443, id: 'another-placeholder', network: 'tcp', security: 'tls' },
   resources: { domainSuffix: ['.ru'] },
 };
 const HQ = {
-  id: 'hq', name: 'HQ', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'openvpn',
+  id: 'hq', name: 'HQ', onUnavailable: 'block', enabled: true, protocol: 'openvpn',
   config: { profile: 'client\ndev tun\nremote hq.example.net 1194\n', interfaceSuffix: '0' },
   resources: { domainSuffix: ['.hq.example'], ipCidr: ['10.0.0.0/8'] },
 };

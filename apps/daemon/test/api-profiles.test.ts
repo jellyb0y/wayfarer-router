@@ -1270,7 +1270,6 @@ test('a tunnel secret is stored wrapped, never returned, and redacted on export'
         {
           id: 'alt-a',
           name: 'Warsaw',
-          role: 'alternative',
           onUnavailable: 'block',
           enabled: true,
           protocol: 'vless',
@@ -1323,7 +1322,6 @@ test('a tunnel secret is stored wrapped, never returned, and redacted on export'
         {
           id: 'alt-a',
           name: 'Warsaw renamed',
-          role: 'alternative',
           onUnavailable: 'block',
           enabled: true,
           protocol: 'vless',
@@ -1364,7 +1362,6 @@ test('a tunnel secret is stored wrapped, never returned, and redacted on export'
         {
           id: 'alt-a',
           name: 'Warsaw',
-          role: 'alternative',
           onUnavailable: 'block',
           enabled: true,
           protocol: 'vless',
@@ -1418,7 +1415,6 @@ test('an ordinary unmarked value in a tunnel configuration is not reported as le
         {
           id: 'alt-a',
           name: 'Warsaw',
-          role: 'alternative',
           onUnavailable: 'block',
           enabled: true,
           /*
@@ -1679,7 +1675,6 @@ test('parsing a subscription returns tunnel drafts and stores nothing', async (t
           {
             id: 'from-link',
             name: parsed.nodes[0]!.name,
-            role: 'alternative',
             onUnavailable: 'block',
             enabled: true,
             protocol: parsed.nodes[0]!.protocol,
@@ -1819,7 +1814,6 @@ function storeUnreadableRow(database: ReturnType<typeof openDatabase>, id: strin
       {
         id: 'legacy',
         name: 'A tunnel from before',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'block',
         provider: 'wireguard',
@@ -1945,7 +1939,6 @@ for (const protocol of ['wireguard', 'shadowsocks']) {
           {
             id: 'alt-a',
             name: 'Elsewhere',
-            role: 'alternative',
             onUnavailable: 'block',
             enabled: true,
             protocol,
@@ -1996,7 +1989,6 @@ test('import refuses a protocol outside the catalogue rather than reporting it a
           {
             id: 'alt-a',
             name: 'Elsewhere',
-            role: 'alternative',
             onUnavailable: 'block',
             enabled: true,
             protocol: 'wireguard',
@@ -2044,7 +2036,6 @@ test('a configuration its own catalogue entry cannot accept is refused at the wr
         {
           id: 'alt-a',
           name: 'Berlin',
-          role: 'alternative',
           onUnavailable: 'block',
           enabled: true,
           protocol: 'cloak-openvpn',
@@ -2089,7 +2080,6 @@ test('a valid catalogue tunnel is still accepted', async (t) => {
         {
           id: 'alt-a',
           name: 'Warsaw',
-          role: 'alternative',
           onUnavailable: 'block',
           enabled: true,
           protocol: 'vless',
@@ -2257,7 +2247,6 @@ test('a stored probe is migrated away on read, and a PUT that names one is refus
   const partner = {
     id: 'partner',
     name: 'Partner',
-    role: 'resource',
     enabled: true,
     onUnavailable: 'block',
     protocol: 'openvpn',
@@ -2275,7 +2264,7 @@ test('a stored probe is migrated away on read, and a PUT that names one is refus
   const read = (await app.inject({ method: 'GET', url: `/api/profiles/${id}`, headers })).json<{
     document: { schemaVersion: number; tunnels: Record<string, unknown>[] };
   }>().document;
-  assert.equal(read.schemaVersion, 8);
+  assert.equal(read.schemaVersion, 9);
   assert.equal('probe' in read.tunnels[0]!, false);
   assert.deepEqual(read.tunnels[0]!['resources'], { ipCidr: ['172.30.0.212/32'] });
 
@@ -2338,17 +2327,26 @@ function everySecretProfile(blank: Record<string, unknown>): Record<string, unkn
   });
   return {
     ...blank,
-    subscriptions: [
-      { id: 'feed', name: 'Feed', url: `https://feed.example.invalid/${SENTINEL}-subscription`, refreshHours: 24, enabled: true },
+    groups: [
+      {
+        id: 'feed', name: 'Feed', url: `https://feed.example.invalid/${SENTINEL}-subscription`, refreshHours: 24, enabled: true, onUnavailable: 'block',
+        // A member's credentials are the feed's, and an export must not carry them either.
+        members: [
+          {
+            id: 'feed-1', name: 'Node', node: 'vless://198.51.100.8:443', protocol: 'vless',
+            config: { server: '198.51.100.8', port: 443, id: `${SENTINEL}-member-account`, network: 'tcp', security: 'tls' },
+          },
+        ],
+      },
     ],
     tunnels: [
       {
-        id: 'partner', name: 'Partner', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'openvpn',
+        id: 'partner', name: 'Partner', onUnavailable: 'block', enabled: true, protocol: 'openvpn',
         config: { profile: ovpn('partner'), interfaceSuffix: 'prt', auth: { username: 'someone', password: `${SENTINEL}-partner-password` } },
         resources: { ipCidr: ['172.30.0.212/32'] },
       },
       {
-        id: 'hq', name: 'HQ', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn',
+        id: 'hq', name: 'HQ', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn',
         config: {
           profile: ovpn('hq'),
           interfaceSuffix: 'hq',
@@ -2357,15 +2355,15 @@ function everySecretProfile(blank: Record<string, unknown>): Record<string, unkn
         },
       },
       {
-        id: 'corp', name: 'Corp', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn',
+        id: 'corp', name: 'Corp', onUnavailable: 'block', enabled: true, protocol: 'cloak-openvpn',
         config: { profile: ovpn('corp'), interfaceSuffix: 'crp', entryPoints: [entryPoint('corpsg')] },
       },
       {
-        id: 'relay', name: 'Relay', role: 'resource', onUnavailable: 'block', enabled: true, protocol: 'vless',
+        id: 'relay', name: 'Relay', onUnavailable: 'block', enabled: true, protocol: 'vless',
         config: { server: '198.51.100.7', port: 443, id: `${SENTINEL}-vless-account`, encryption: `${SENTINEL}-vless-encryption`, network: 'ws', security: 'tls', serverName: '198.51.100.7', fingerprint: 'chrome', path: '/' },
       },
       {
-        id: 'spare', name: 'Spare', role: 'alternative', onUnavailable: 'block', enabled: true, protocol: 'proxy',
+        id: 'spare', name: 'Spare', onUnavailable: 'block', enabled: true, protocol: 'proxy',
         config: { type: 'socks', server: '198.51.100.20', port: 1080, auth: { username: 'someone', password: `${SENTINEL}-proxy-password` } },
       },
     ],
@@ -2388,8 +2386,8 @@ test('a redacted export of the board’s tunnel shapes carries no secret, and re
   const full = await app.inject({ method: 'GET', url: `/api/profiles/${id}/export?secrets=include`, headers });
   const planted = full.body.match(new RegExp(`${SENTINEL}[-a-z0-9]*`, 'g')) ?? [];
   // Every sentinel was stored: 3 profiles × 2 blocks, 2 OpenVPN passwords, 5 UIDs, the VLESS account and
-  // encryption, the proxy password, the subscription URL.
-  assert.equal(new Set(planted).size, 17, JSON.stringify([...new Set(planted)]));
+  // encryption, the proxy password, the subscription URL, and a group member's account.
+  assert.equal(new Set(planted).size, 18, JSON.stringify([...new Set(planted)]));
 
   const redacted = await app.inject({ method: 'GET', url: `/api/profiles/${id}/export`, headers });
   assert.equal(redacted.statusCode, 200);

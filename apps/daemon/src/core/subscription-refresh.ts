@@ -1,5 +1,5 @@
 /**
- * Refreshing the active profile's subscriptions on their own schedule.
+ * Refreshing the active profile's groups from their subscriptions, on their own schedule.
  *
  * ## The symptom it exists for
  *
@@ -17,12 +17,11 @@
  * * **Nothing without a trusted clock.** "Due" is a wall-clock comparison against `lastRefresh.at`, and
  *   this board has no RTC battery: after a power cut its clock resumes days behind until NTP answers. A
  *   refresh stamped then would be stamped with a wrong time, and the next due date with it.
- * * **A feed that fails, or offers nothing this device can run, changes no tunnel.** Only `lastRefresh`
+ * * **A feed that fails, or offers nothing this device can run, changes no member.** Only `lastRefresh`
  *   records it. An empty answer is what a provider's outage looks like, and treating it as "the feed has
- *   no nodes now" would delete every derived tunnel nothing names.
- * * **New nodes arrive disabled** — unless a tunnel in use lost its node in the same refresh, in which
- *   case that tunnel moves to the new node (rule 2 in `core/subscriptions.ts`). A node nothing needs does
- *   not start running because a feed grew; it appears in the profile, off.
+ *   no nodes now" would empty the group the device's traffic goes through.
+ * * Otherwise the group's members become what the feed offers (`core/subscriptions.ts`), and the watchdog
+ *   chooses among them on its next round.
  * * **Only `hot` and `service` changes are applied** (`refreshMayApply`), and with the caller's classes
  *   narrowed, so no confirmation window is ever opened by a timer. A refresh that needs more is not
  *   stored at all: the event names what it would have changed.
@@ -34,8 +33,8 @@
  *   stored profile is again what the device runs and the next round is not blocked by its own leftover.
  */
 
-import { nodeIdentity, nodeName, parseSubscription, type ParsedNode } from '@wayfarer/protocols';
-import type { ProfileDocument, Tunnel } from '@wayfarer/schemas';
+import { parseSubscription } from '@wayfarer/protocols';
+import type { Group, ProfileDocument } from '@wayfarer/schemas';
 import type { FetchTextResult } from '../platform/http.ts';
 import type { ProfileStore } from '../state/profiles.ts';
 import type { Store } from '../state/store.ts';
@@ -43,7 +42,7 @@ import { applyDocument, type ApplyDeps, type ApplyOutcome } from './apply.ts';
 import { secretText } from './catalogue/values.ts';
 import type { ObserverRegistry } from './observers.ts';
 import { planDocument, type PlannedDocument } from './pipeline.ts';
-import { refreshMayApply, refreshSubscription, type RefreshOutcome } from './subscriptions.ts';
+import { refreshGroup, refreshMayApply, type RefreshOutcome } from './subscriptions.ts';
 
 /** How often the round asks what is due. A refresh itself happens no more than `refreshHours` allows. */
 export const SUBSCRIPTION_CHECK_MS = 10 * 60_000;
@@ -55,7 +54,7 @@ export const SUBSCRIPTION_RETRY_MS = 60 * 60_000;
 /** `lastRefresh.detail`'s schema limit. */
 const DETAIL_MAX = 200;
 
-type Subscription = NonNullable<ProfileDocument['subscriptions']>[number];
+type Subscription = Group;
 type LastRefresh = { at: string; ok: boolean; detail: string; nodeCount: number };
 type RecordEvent = (event: { level: 'info' | 'warn' | 'error'; kind: string; summary: string; detail?: unknown }) => void;
 
@@ -86,41 +85,16 @@ export function notDueReason(subscription: Subscription, nowMs: number): string 
 }
 
 /**
- * A parsed node as a tunnel.
- *
- * An existing tunnel keeps everything a person decided — id, name, role, what it carries, whether it is
- * on — and takes its configuration from the feed. The configuration is the feed's: a person's edit to a
- * derived tunnel's configuration does not survive a refresh, and that is the price of a refresh being
- * able to deliver a changed credential at all (see `VlessConfig` in `@wayfarer/schemas`).
- */
-export function tunnelFromNode(node: ParsedNode, existing: Tunnel | undefined, subscriptionId: string, taken: Set<string>): Tunnel {
-  if (existing !== undefined) return { ...existing, protocol: node.protocol, config: node.config } as Tunnel;
-  let n = 1;
-  while (taken.has(`${subscriptionId}-${String(n)}`.slice(0, 63))) n += 1;
-  const id = `${subscriptionId}-${String(n)}`.slice(0, 63);
-  taken.add(id);
-  return {
-    id,
-    name: nodeName(node).slice(0, 64),
-    role: 'alternative',
-    onUnavailable: 'block',
-    enabled: false,
-    protocol: node.protocol,
-    config: node.config,
-  } as Tunnel;
-}
-
-/**
  * The document with every `lastRefresh` removed, keys sorted: what "the same configuration" is compared
  * on. Sorted because the applied copy and the stored one are written by different statements and
  * nothing promises they keep one key order.
  */
 function withoutObservations(document: unknown): string {
-  const doc = document as { subscriptions?: Record<string, unknown>[] } | null;
+  const doc = document as { groups?: Record<string, unknown>[] } | null;
   if (doc === null) return 'null';
   return JSON.stringify(sorted({
     ...doc,
-    subscriptions: (doc.subscriptions ?? []).map(({ lastRefresh: _ignored, ...rest }) => rest),
+    groups: (doc.groups ?? []).map(({ lastRefresh: _ignored, ...rest }) => rest),
   }));
 }
 
@@ -137,11 +111,9 @@ function clip(text: string): string {
 
 function describeChange(outcome: RefreshOutcome): string {
   const parts: string[] = [];
-  if (outcome.added.length > 0) parts.push(`added ${outcome.added.join(', ')} (disabled)`);
+  if (outcome.added.length > 0) parts.push(`added ${outcome.added.join(', ')}`);
   if (outcome.updated.length > 0) parts.push(`updated ${outcome.updated.join(', ')}`);
   if (outcome.removed.length > 0) parts.push(`removed ${outcome.removed.join(', ')}`);
-  for (const move of outcome.repointed) parts.push(`${move.id} moved from ${move.from} to ${move.to}`);
-  if (outcome.keptBecauseReferenced.length > 0) parts.push(`no longer offered but still in use: ${outcome.keptBecauseReferenced.join(', ')}`);
   return parts.join('; ');
 }
 
@@ -175,7 +147,7 @@ export function refreshSubscriptions(input: {
       }));
   const observer = input.observers.register({
     name: 'subscription-refresh',
-    watches: "whether each of the active profile's subscriptions is refreshed as often as its refreshHours says",
+    watches: "whether each of the active profile's groups is refreshed from its subscription as often as its refreshHours says",
     everyMs: checkMs,
   });
 
@@ -195,7 +167,7 @@ export function refreshSubscriptions(input: {
       input.record({
         level: 'warn',
         kind: 'subscription.fetch-failed',
-        summary: `subscription "${subscription.name}" could not be fetched: ${fetched.reason}; no tunnel was changed`,
+        summary: `subscription "${subscription.name}" could not be fetched: ${fetched.reason}; no member was changed`,
         detail: { subscription: subscription.id, reason: fetched.reason },
       });
       return `${subscription.id}: fetch failed (${fetched.reason})`;
@@ -209,7 +181,7 @@ export function refreshSubscriptions(input: {
       input.record({
         level: 'warn',
         kind: 'subscription.fetch-failed',
-        summary: `subscription "${subscription.name}": ${reason}; no tunnel was changed`,
+        summary: `subscription "${subscription.name}": ${reason}; no member was changed`,
         detail: { subscription: subscription.id, refused: refusedLines },
       });
       return `${subscription.id}: empty feed`;
@@ -222,30 +194,12 @@ export function refreshSubscriptions(input: {
     const row = profiles.get(profileId);
     if (row === null) return `${subscription.id}: the profile went away during the fetch`;
     const document = row.document as ProfileDocument;
-    const taken = new Set(document.tunnels.map((tunnel) => tunnel.id));
-    const outcome = refreshSubscription({
-      document,
-      subscriptionId: subscription.id,
-      nodes: parsed.nodes,
-      toTunnel: (node, existing) => tunnelFromNode(node, existing, subscription.id, taken),
-    });
-    const changed = outcome.added.length + outcome.updated.length + outcome.removed.length + outcome.repointed.length > 0;
+    const outcome = refreshGroup({ document, groupId: subscription.id, nodes: parsed.nodes });
+    const changed = outcome.added.length + outcome.updated.length + outcome.removed.length > 0;
     const offered = `${String(parsed.nodes.length)} node(s) offered`;
-    const kept = outcome.keptBecauseReferenced;
-
-    if (kept.length > 0) {
-      input.record({
-        level: 'warn',
-        kind: 'subscription.node-withdrawn',
-        summary:
-          `subscription "${subscription.name}" no longer offers the node behind ${kept.join(', ')}, and ` +
-          'has no free node to move it to; the old definition is kept because the policy or a rule names it',
-        detail: { subscription: subscription.id, kept, notes: outcome.notes },
-      });
-    }
 
     if (!changed) {
-      stamp({ at, ok: true, detail: kept.length > 0 ? `${offered}; no longer offered but still in use: ${kept.join(', ')}` : `${offered}; nothing changed`, nodeCount: parsed.nodes.length });
+      stamp({ at, ok: true, detail: `${offered}; nothing changed`, nodeCount: parsed.nodes.length });
       return `${subscription.id}: ${offered}, nothing changed`;
     }
 
@@ -310,8 +264,7 @@ export function refreshSubscriptions(input: {
         added: outcome.added,
         updated: outcome.updated,
         removed: outcome.removed,
-        repointed: outcome.repointed,
-        kept,
+        notes: outcome.notes,
         refused: refusedLines,
         transaction: applied.transaction?.id,
       },
@@ -327,9 +280,9 @@ export function refreshSubscriptions(input: {
       observer.looked('no active profile');
       return;
     }
-    const subscriptions = (row.document as ProfileDocument).subscriptions ?? [];
+    const subscriptions = (row.document as ProfileDocument).groups ?? [];
     if (subscriptions.length === 0) {
-      observer.looked('the active profile has no subscriptions');
+      observer.looked('the active profile has no groups');
       observer.failing(null);
       return;
     }
@@ -352,7 +305,7 @@ export function refreshSubscriptions(input: {
 
     // Failing while any enabled feed's last attempt failed: the device is running on a list it could not
     // check, and that should be visible without opening the profile.
-    const latest = ((profiles.get(profileId)?.document as ProfileDocument | undefined)?.subscriptions ?? []).filter(
+    const latest = ((profiles.get(profileId)?.document as ProfileDocument | undefined)?.groups ?? []).filter(
       (subscription) => subscription.enabled && subscription.refreshHours > 0 && subscription.lastRefresh?.ok === false,
     );
     observer.failing(

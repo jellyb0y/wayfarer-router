@@ -47,7 +47,6 @@ function profileWithTunnel(config: Record<string, unknown>, protocol = 'vless'):
       {
         id: 'alt-a',
         name: 'Warsaw',
-        role: 'alternative',
         onUnavailable: 'block' as const,
         enabled: true,
         protocol,
@@ -379,7 +378,6 @@ test('two obfuscation entry points never share a port, however many there are', 
         {
           id: 'a',
           name: 'A',
-          role: 'alternative',
           onUnavailable: 'block' as const,
           enabled: true,
           protocol: 'cloak-openvpn',
@@ -418,7 +416,6 @@ test('an allocated port that collides with the core control API is caught, namin
       {
         id: 'sub',
         name: 'Subscription',
-        role: 'alternative',
         onUnavailable: 'block' as const,
         enabled: true,
         protocol: 'vless',

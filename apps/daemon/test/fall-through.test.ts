@@ -57,7 +57,6 @@ function profile(): ProfileDocument {
       {
         id: 'corp',
         name: 'Corp',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'fall-through',
         protocol: 'openvpn',
@@ -67,7 +66,6 @@ function profile(): ProfileDocument {
       {
         id: 'partner',
         name: 'Partner',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'block',
         protocol: 'openvpn',
@@ -77,7 +75,6 @@ function profile(): ProfileDocument {
       {
         id: 'spare',
         name: 'Spare',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'fall-through',
         protocol: 'proxy',
@@ -255,9 +252,9 @@ function harness(options: { selectors?: Map<string, string>; withDns?: boolean; 
     createWatchdog({
       core,
       selector: CORE_TAGS.selector,
-      candidates: async () => [],
+      selections: async () => ({ groups: [], egress: null }),
       guards: async () => guards,
-      policy: () => ({ priority: [], excluded: [], sticky: true, onAllDown: 'direct', probes }),
+      policy: () => ({ sticky: true, onAllDown: 'direct', probes }),
       record: (event) => events.push({ kind: event.kind, summary: event.summary }),
       log: () => undefined,
       now: () => clock,

@@ -1,5 +1,10 @@
 /**
- * The failover policy: which alternative is chosen, and how the device decides one has stopped working.
+ * The failover policy: where traffic no rule names goes, and how the device decides a member of a group
+ * has stopped working.
+ *
+ * Since schema 9 the first half is one choice, the egress — a group or a tunnel. There is no order to
+ * edit: a group's members are what its subscription offers, and the watchdog keeps its traffic on one
+ * healthy member and moves it to the best other one when that member fails.
  *
  * ## Why this is on Tunnels and not on a screen of its own
  *
@@ -24,7 +29,7 @@
  */
 import type { ReactElement } from 'react';
 import { readAt } from '../lib/draft.ts';
-import { BooleanChoiceField, Fold, NumberField, TextList } from './ui/index.tsx';
+import { BooleanChoiceField, Fold, NumberField, SelectField, TextList } from './ui/index.tsx';
 
 /**
  * Whether a recovered preference takes the traffic back.
@@ -37,15 +42,15 @@ import { BooleanChoiceField, Fold, NumberField, TextList } from './ui/index.tsx'
 const STICKY = [
   {
     value: false,
-    title: 'Return to the best',
+    title: 'Move live connections',
     consequence:
-      'Traffic moves back as soon as a preferred tunnel is healthy, breaking open connections.',
+      'When a group moves to another member, open connections are broken and re-made through it.',
   },
   {
     value: true,
     title: 'Stay where it is',
     consequence:
-      'The current tunnel is kept while it is healthy, so a flapping preferred one cannot move traffic.',
+      'A group keeps its member while it is healthy, and open connections are left where they are when it moves.',
   },
 ] as const;
 
@@ -53,45 +58,24 @@ export function FailoverPolicy({ document }: { document: Record<string, unknown>
   const policy = (readAt(document, '/policy') as Record<string, unknown> | undefined) ?? {};
   const probes = (policy['probes'] as Record<string, unknown> | undefined) ?? {};
   const tunnels = (readAt(document, '/tunnels') as Record<string, unknown>[] | undefined) ?? [];
+  const groups = (readAt(document, '/groups') as Record<string, unknown>[] | undefined) ?? [];
 
-  /*
-   * The ids that belong in these two lists, named in the help sentence rather than left to memory.
-   * Same shape as the routing rule that names the rule sets defined beside it: a list of free text
-   * whose legal values are three rows further up the screen is a list people get wrong once and then
-   * distrust. Only `alternative` tunnels — a resource tunnel is reached by a routing rule and is
-   * never part of the failover group, so offering one here would be offering a value the device
-   * refuses.
-   */
-  const alternatives = tunnels
-    .filter((tunnel) => tunnel['role'] !== 'resource')
-    .map((tunnel) => String(tunnel['id'] ?? ''))
-    .filter((id) => id !== '');
-  const naming =
-    alternatives.length === 0
-      ? 'No alternative tunnels in this profile yet.'
-      : // The ids rather than a count was the first version, and a profile with sixteen tunnels made
-        // it a 154-character sentence under a three-word label. The list they come from is the card
-        // directly above this one.
-        `One id per line, from the ${alternatives.length} alternative tunnels above.`;
+  // Groups first: a subscription is what an egress usually is. A tunnel can be one too.
+  const choices = [
+    ...groups.map((group) => ({ value: String(group['id'] ?? ''), title: `Group · ${String(group['name'] ?? group['id'])}` })),
+    ...tunnels.map((tunnel) => ({ value: String(tunnel['id'] ?? ''), title: `Tunnel · ${String(tunnel['name'] ?? tunnel['id'])}` })),
+  ].filter((choice) => choice.value !== '');
 
   return (
     <>
-      <Fold summary="Which one it picks">
-        <TextList
-          pointer="/policy/priority"
-          label="Preferred order"
-          value={policy['priority'] as string[] | undefined}
-          help={naming}
-        />
-        {/*
-          * Kept out of the group rather than deleted, which is the whole reason this field exists
-          * separately from removing the tunnel: an alternative parked here keeps its credentials.
-          */}
-        <TextList
-          pointer="/policy/excluded"
-          label="Kept out"
-          value={policy['excluded'] as string[] | undefined}
-          help="Alternatives that stay configured and are never chosen."
+      <Fold summary="Where traffic goes">
+        <SelectField
+          pointer="/policy/egress"
+          label="Egress"
+          value={policy['egress']}
+          options={choices}
+          absent={{ title: 'Nowhere', write: undefined }}
+          help="Everything no rule names. A group uses whichever of its members is healthy."
         />
         <BooleanChoiceField
           pointer="/policy/sticky"

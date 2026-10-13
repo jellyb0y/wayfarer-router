@@ -870,5 +870,6 @@ export * from './migrate-to-catalogue.ts';
 export * from './profile-defaults.ts';
 export * from './validate-profile.ts';
 export * from './routing-rules.ts';
+export * from './groups.ts';
 export * from './parity.ts';
 export * from './source.ts';

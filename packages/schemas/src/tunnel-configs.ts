@@ -255,13 +255,11 @@ export const VlessSecurity = Type.Union(
  * because nothing refetches it. (Contrast `/tunnels/-/derivedFrom/*` in the profile document, which a
  * refresh does rewrite and which is marked `subscription` leaf by leaf.)
  *
- * **Corrected 2026-10-14.** This said "these survive editing, because nothing refetches them", and that
- * was true only because the subscription refresh had never run. On a tunnel with a `derivedFrom`, the
- * refresh (`apps/daemon/src/core/subscription-refresh.ts`) replaces the whole configuration with what
- * the feed now says: a changed credential reaching the device is the reason the refresh exists, and a
- * merge that kept a person's value would also keep a value the provider has since withdrawn. The mark
- * stays `person` because the same fields are a person's on every tunnel that was not derived, and the
- * editor still lets them be changed on one that was — the change lasts until the next refresh.
+ * **Corrected 2026-10-14.** This said "these survive editing, because nothing refetches them", and for a
+ * day it was false: tunnels derived from a subscription had their configuration replaced by every refresh.
+ * Since schema 9 nothing a feed offers is a tunnel — it is a group member (`/groups/-/members/-/config`),
+ * a copy of this declaration marked `subscription` leaf by leaf (`FeedWritten`), with no controls. So the
+ * sentence is true again, for the only kind of tunnel there is: a person's.
  *
  * **If the editor is ever changed to lock these after parsing a link, they become `subscription` and
  * must be marked leaf by leaf** — not on this object, because an exempting mark must never be

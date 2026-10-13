@@ -544,7 +544,6 @@ function profileForBench(withRuleSets = false): ProfileDocument {
       {
         id: 'res-hq',
         name: 'HQ',
-        role: 'resource',
         onUnavailable: 'block',
         enabled: true,
         protocol: 'openvpn',

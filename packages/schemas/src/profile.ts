@@ -23,13 +23,13 @@ import { Type, type Static, type TSchema } from '@sinclair/typebox';
 import { Identifier } from './identifier.ts';
 import { TUNNEL_CONFIGS, type TunnelProtocol } from './tunnel-configs.ts';
 import { Secret } from './secrets.ts';
-import { Source } from './source.ts';
+import { Copy, FeedWritten, Source } from './source.ts';
 
 /**
  * The document's own version, carried inside the document rather than only in the database, so an
  * exported profile knows what it is and can be migrated on import a year later.
  */
-export const PROFILE_SCHEMA_VERSION = 8;
+export const PROFILE_SCHEMA_VERSION = 9;
 
 /* ── hardware binding ────────────────────────────────────────────────────────────────────── */
 
@@ -410,25 +410,17 @@ export const TunnelDns = Source('person', Type.Object(
   { additionalProperties: false },
 ));
 
-/**
- * The two roles, declared rather than inferred from the protocol.
- *
- * An **alternative** is interchangeable with other alternatives: it joins the failover group and
- * unmatched traffic goes to whichever is selected. A **resource** is not interchangeable —
- * substituting a public proxy for a corporate tunnel is meaningless — so it never joins the group
- * and is reached only by explicit rules. Two endpoints of the same protocol can be one of each,
- * which is why this is a field.
+/*
+ * There is no `role` here since schema 9 (2026-10-14). It said whether a tunnel joined the failover
+ * group (`alternative`) or was reached only by rules (`resource`). Failover is now a group's business —
+ * a group is a subscription, its members are what the feed offers — and the main egress is named once,
+ * at `/policy/egress`. What made a tunnel a resource was always its `resources`; that is what decides it
+ * now. A document at schema 9 that still carries the field is refused by name (`validate-profile.ts`).
  */
-export const TunnelRole = Source(
-  'person',
-  Type.Union([Type.Literal('alternative'), Type.Literal('resource')]),
-);
-
 const TunnelCommon = {
     /** `generated`, like every identifier here — the argument is at `/uplinks/-/id` and in `source.ts`. */
     id: Source('generated', Identifier),
     name: Source('person', Type.String({ minLength: 1, maxLength: 64 })),
-    role: TunnelRole,
     enabled: Source('person', Type.Boolean({ default: true })),
     resources: Type.Optional(TunnelResources),
     /**
@@ -491,30 +483,10 @@ const TunnelCommon = {
      * carries it is refused by name — see `validate-profile.ts`.
      */
     dns: Type.Optional(TunnelDns),
-    /**
-     * Present when this tunnel came from a subscription rather than from a person.
-     *
-     * The mark is what makes a refresh safe: it may replace the derived tunnels of **its own**
-     * subscription and must never touch a hand-authored one. Without it a refresh would have to guess
-     * which tunnels it owns, and the failure mode of guessing is deleting somebody's work.
-     *
-     * `node` is the feed's identity for the entry, not its display name: names change between
-     * refreshes for cosmetic reasons and an identity that moves is an identity that cannot be matched.
+    /*
+     * No `derivedFrom` since schema 9: a tunnel is always a person's. What a feed offers is a group's
+     * members, `/groups/-/members`, and never appears in this list.
      */
-    // Both marked `subscription`, leaf by leaf, because an exempting mark must never be inherited.
-    // Written by `core/subscriptions.ts` on every refresh and by nothing else; a control over either
-    // would be overwritten by the next refresh, and a person editing `node` would break the identity
-    // match that keeps a refresh from deleting somebody's work. Note that `subscription` here is a
-    // *reference to* a subscription the owner created — the reference is still the feed's to write.
-    derivedFrom: Type.Optional(
-      Type.Object(
-        {
-          subscription: Source('subscription', Identifier),
-          node: Source('subscription', Type.String({ minLength: 1, maxLength: 256 })),
-        },
-        { additionalProperties: false },
-      ),
-    ),
 } as const;
 
 /**
@@ -587,11 +559,21 @@ export type Tunnel = Static<typeof Tunnel>;
  */
 export const Policy = Source('person', Type.Object(
   {
-    /** Tunnel ids in preference order. Only `alternative` tunnels belong here. */
-    priority: Type.Array(Identifier, { maxItems: 64, default: [] }),
-    /** Alternatives kept out of the failover group without deleting them. */
-    excluded: Type.Array(Identifier, { maxItems: 64, default: [] }),
-    /** Stay on the current choice while it is healthy, rather than returning to the top on recovery. */
+    /**
+     * Where traffic no rule names goes: **one** group or one tunnel, by id. Absent means nowhere — it
+     * takes `onAllDown`.
+     *
+     * One id rather than an ordered list, and that is the schema-9 decision. The list (`priority`, with
+     * `excluded` beside it) was a second description of what the subscription already said: on the bench
+     * board on 2026-10-13 the feed had dropped the node `france` was built from and offered another, and
+     * the list went on naming the dead one. A group's members are whatever the feed offers now, and the
+     * watchdog picks among them; nothing here has to be kept in step with the feed by hand.
+     */
+    egress: Type.Optional(Identifier),
+    /**
+     * Stay on a group's current member while it is healthy. When it is not, move to the healthy member
+     * with the best score (latency, jitter and loss — `core/health.ts`).
+     */
     sticky: Type.Boolean({ default: true }),
     probes: Type.Object(
       {
@@ -638,7 +620,7 @@ export const Policy = Source('person', Type.Object(
       },
       { additionalProperties: false },
     ),
-    /** What unmatched traffic does when no alternative is healthy. */
+    /** What unmatched traffic does when the egress has no healthy member, or there is no egress. */
     onAllDown: Type.Union([Type.Literal('block'), Type.Literal('direct')], { default: 'block' }),
   },
   { additionalProperties: false, $id: 'Policy' },
@@ -993,21 +975,46 @@ export const ProfileMeta = Type.Object(
   { additionalProperties: false },
 );
 
-/* ── subscriptions ───────────────────────────────────────────────────────────────────────── */
+/* ── groups ──────────────────────────────────────────────────────────────────────────────── */
 
 /**
- * A feed of tunnel definitions, kept **in the profile** rather than in device state.
+ * One node of a group, **as the feed offers it now.** Written by the subscription refresh and by
+ * nothing else; every field is marked `subscription` (`FeedWritten`), so none asks for a control.
  *
- * It is configuration: it must travel with the document to another device, survive an export and be
- * reported as missing on an import that cannot see its secret. Device state is for what this
- * particular board has observed, and a subscription is not that.
- *
- * The URL carries the secret annotation because it almost always embeds a credential — the token is
- * in the path or the query. That single annotation buys the four behaviours the secret machinery
- * provides: redaction on read, a redacted export, an import that names what is missing, and a write
- * that can say `{"$keep": true}` rather than blanking it.
+ * `id` is this product's: stable for as long as the feed keeps offering the node (matched by `node`),
+ * because it is the node's outbound tag, its external client's unit name and its place in the port
+ * order. A new node gets `<group>-<n>`, the first unused.
  */
-export const Subscription = Type.Object(
+export const GroupMember = Type.Object(
+  {
+    id: Source('generated', Identifier),
+    name: Source('subscription', Type.String({ minLength: 1, maxLength: 64 })),
+    /** The feed's identity for the node: `protocol://server:port`. A rename keeps it. */
+    node: Source('subscription', Type.String({ minLength: 1, maxLength: 256 })),
+    protocol: Source('subscription', Type.Literal('vless')),
+    config: FeedWritten(TUNNEL_CONFIGS.vless),
+  },
+  { additionalProperties: false, $id: 'GroupMember' },
+);
+export type GroupMember = Static<typeof GroupMember>;
+
+/**
+ * A group of interchangeable tunnels, **and its members are what its subscription offers.**
+ *
+ * Schema 9 (2026-10-14). Before it, each node of a feed became a separate tunnel, the failover order was
+ * a list beside them, and keeping the two in step with the feed was the refresh's job — which it did
+ * badly, because it had to guess what a person meant by the list. Now there is nothing to keep in step:
+ * a node the feed drops leaves the group, a node it adds joins it, and the watchdog keeps the group's
+ * traffic on one healthy member (sticky) and moves it when that member dies.
+ *
+ * A group is used the way a tunnel is: named by `/policy/egress` it carries everything no rule names;
+ * with `resources` it carries those destinations; named by a rule or by an OpenVPN `via` it carries that.
+ *
+ * Kept **in the profile** rather than in device state: the subscription is configuration, it must travel
+ * with the document, and the URL is a secret. The members travel too, so a document moved to another
+ * device plans the same outbounds before its first refresh there.
+ */
+export const Group = Type.Object(
   {
     /** `generated`, like every identifier here — the argument is at `/uplinks/-/id` and in `source.ts`. */
     id: Source('generated', Identifier),
@@ -1016,22 +1023,26 @@ export const Subscription = Type.Object(
     /** The feed. Annotated as a secret: the credential is usually inside the URL itself. */
     url: Source('person', Secret({ kind: 'subscription-url' })),
     /**
-     * How often the device may refresh unasked, in hours. `0` means never — refresh only when a person
+     * How often the device refreshes unasked, in hours. `0` means never — refresh only when a person
      * asks for it.
      *
      * Bounded below at one hour rather than allowing minutes: a feed polled aggressively is a feed
      * that gets the device blocked, and the device edits its own configuration on every refresh.
      */
-    refreshHours: Source('person', Type.Integer({ minimum: 0, maximum: 24 * 30, default: 24 })),
+    refreshHours: Source('person', Type.Integer({ minimum: 0, maximum: 24 * 30, default: 1 })),
+    /** What this group carries besides being an egress: the destinations the resources anchor sends here. */
+    resources: Type.Optional(Copy(TunnelResources)),
+    dns: Type.Optional(Copy(TunnelDns)),
+    /** As on a tunnel: what its traffic does when **no** member is healthy. */
+    onUnavailable: Source('person', Type.Union([Type.Literal('block'), Type.Literal('fall-through')], { default: 'block' })),
+    members: Type.Array(GroupMember, { maxItems: 64, default: [] }),
     /**
      * What the device has learned by fetching it. Observations, not intent — kept here so a profile
      * moved to another device arrives honest about never having been refreshed *there*.
      */
     // Marked leaf by leaf and `device`, never on the object, because an exempting mark must not be
-    // inherited by a field added here later. The declaration above says what these are: what this
-    // board learned by fetching, kept in the profile so a document moved elsewhere arrives honest
-    // about never having been refreshed *there*. `nodeCount` comes from the feed's answer but the
-    // count is this device's reading of it, and all four are overwritten by the next refresh.
+    // inherited by a field added here later. `ok` means the device now runs what the feed says: a
+    // refresh that was held or failed to apply is `false`, and is retried within the hour.
     lastRefresh: Type.Optional(
       Type.Object(
         {
@@ -1045,9 +1056,9 @@ export const Subscription = Type.Object(
       ),
     ),
   },
-  { additionalProperties: false, $id: 'Subscription' },
+  { additionalProperties: false, $id: 'Group' },
 );
-export type Subscription = Static<typeof Subscription>;
+export type Group = Static<typeof Group>;
 
 export const ProfileDocument = Type.Object(
   {
@@ -1066,8 +1077,8 @@ export const ProfileDocument = Type.Object(
     accessPoint: Type.Union([AccessPoint, Type.Null()]),
     network: NetworkConfig,
     tunnels: Type.Array(Tunnel, { maxItems: 128, default: [] }),
-    /** Empty by default. See `Subscription`: these are configuration, not device state. */
-    subscriptions: Type.Array(Subscription, { maxItems: 32, default: [] }),
+    /** Empty by default. See `Group`: these are configuration, not device state. */
+    groups: Type.Array(Group, { maxItems: 32, default: [] }),
     policy: Policy,
     routing: Routing,
     dns: DnsConfig,

@@ -41,7 +41,6 @@ function profileWith(protocol: string, config: Record<string, unknown>): Profile
       {
         id: 'only',
         name: 'The tunnel',
-        role: 'alternative',
         onUnavailable: 'block' as const,
         enabled: true,
         protocol,

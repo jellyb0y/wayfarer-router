@@ -150,7 +150,6 @@ function configured(): ProfileDocument {
       {
         id: 'a',
         name: 'A',
-        role: 'alternative',
         enabled: true,
         protocol: 'vless',
         config: { server: 'a.example.net', port: 443, id: 'account-a', network: 'tcp', security: 'tls' },
@@ -158,7 +157,6 @@ function configured(): ProfileDocument {
       {
         id: 'b',
         name: 'B',
-        role: 'alternative',
         enabled: true,
         protocol: 'vless',
         config: { server: 'b.example.net', port: 443, id: 'account-b', network: 'tcp', security: 'tls' },

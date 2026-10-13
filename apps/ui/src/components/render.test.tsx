@@ -157,7 +157,7 @@ describe('the routing editor', () => {
   const document = {
     network: { cidr: '10.44.0.1/24', dhcp: { enabled: true, from: '10.44.0.100', to: '10.44.0.200', leaseHours: 12 } },
     uplinks: [],
-    tunnels: [{ id: 'alt-a', name: 'Warsaw', role: 'alternative', enabled: true, provider: 'singbox-outbound', config: {} }],
+    tunnels: [{ id: 'alt-a', name: 'Warsaw', enabled: true, provider: 'singbox-outbound', config: {} }],
     policy: { priority: [], excluded: [], sticky: true, probes: {}, onAllDown: 'block' },
     firewall: { killSwitch: false, ipv6: 'block', ntpBypass: true, blockedEndpoints: [] },
     routing: {
@@ -831,8 +831,8 @@ describe('what goes where', () => {
   const documentWith = (rules: unknown[]) => ({
     meta: { name: 'bench' },
     tunnels: [
-      { id: 't1', name: 'Amsterdam egress', role: 'alternative', enabled: true, protocol: 'vless', config: {} },
-      { id: 't2', name: 'HQ', role: 'resource', enabled: true, protocol: 'cloak-openvpn', config: {} },
+      { id: 't1', name: 'Amsterdam egress', enabled: true, protocol: 'vless', config: {} },
+      { id: 't2', name: 'HQ', enabled: true, protocol: 'cloak-openvpn', config: {} },
     ],
     routing: { rules, ruleSets: [] },
   });
@@ -931,7 +931,7 @@ describe('how old the list this device routes on actually is', () => {
   ];
   const document = {
     meta: { name: 'bench' },
-    tunnels: [{ id: 't1', name: 'Russian proxy', role: 'alternative', enabled: true, protocol: 'proxy', config: {} }],
+    tunnels: [{ id: 't1', name: 'Russian proxy', enabled: true, protocol: 'proxy', config: {} }],
     routing: {
       rules: [{ kind: 'ruleSet', sets: ['geoip-ru'], action: { outbound: 't1' } }],
       ruleSets: SETS,
@@ -1356,7 +1356,7 @@ describe('password, profiles, device', () => {
     const blocked = await screen.findByRole('button', { name: 'Fill secrets first' });
     expect(blocked.hasAttribute('disabled')).toBe(true);
     // The pointers it is short of are on the row, so the reason is readable without another screen.
-    expect(screen.getByTitle('/accessPoint/passphrase /uplinks/0/config/psk /tunnels/0/config/credentials/password /subscriptions/0/url')).toBeTruthy();
+    expect(screen.getByTitle('/accessPoint/passphrase /uplinks/0/config/psk /tunnels/0/config/credentials/password /groups/0/url')).toBeTruthy();
   });
 
   it('offers no way to copy a profile, because every way it could would move the secrets', async () => {

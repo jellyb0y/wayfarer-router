@@ -114,6 +114,7 @@ function RuleList({ document }: { document: Record<string, unknown> }): ReactEle
   const draft = useDraft();
   const rules = (readAt(document, '/routing/rules') as Rule[] | undefined) ?? [];
   const tunnels = (readAt(document, '/tunnels') as Rule[] | undefined) ?? [];
+  const groups = (readAt(document, '/groups') as Rule[] | undefined) ?? [];
 
   const move = (index: number, by: number): void => {
     const next = [...rules];
@@ -168,7 +169,7 @@ function RuleList({ document }: { document: Record<string, unknown> }): ReactEle
                 {isAnchor ? null : (
                   <div className="row-field">
                     <dt>{t('routing.sendsTo')}</dt>
-                    <dd>{targetTitle(rule, tunnels)}</dd>
+                    <dd>{targetTitle(rule, tunnels, groups)}</dd>
                   </div>
                 )}
               </dl>
@@ -260,6 +261,7 @@ function RuleEditor({
   const draft = useDraft();
   const kind = String(rule['kind']);
   const tunnels = (readAt(document, '/tunnels') as Rule[] | undefined) ?? [];
+  const groups = (readAt(document, '/groups') as Rule[] | undefined) ?? [];
   const ruleSets = (readAt(document, '/routing/ruleSets') as Rule[] | undefined) ?? [];
   const action = rule['action'] as Record<string, unknown> | undefined;
 
@@ -281,6 +283,12 @@ function RuleEditor({
           {tunnels.map((tunnel) => (
             <option key={String(tunnel['id'])} value={String(tunnel['id'])}>
               {String(tunnel['name'] ?? tunnel['id'])} · {protocolTitle(tunnel['protocol'])}
+            </option>
+          ))}
+          {/* A group is a target exactly as a tunnel is: its traffic goes through whichever member it is on. */}
+          {groups.map((group) => (
+            <option key={String(group['id'])} value={String(group['id'])}>
+              {String(group['name'] ?? group['id'])} · group
             </option>
           ))}
         </select>
@@ -645,11 +653,13 @@ function kindTitle(kind: string): string {
  */
 export { protocolTitle };
 
-function targetTitle(rule: Rule, tunnels: Rule[]): string {
+function targetTitle(rule: Rule, tunnels: Rule[], groups: Rule[] = []): string {
   const action = rule['action'] as Record<string, unknown> | undefined;
   const outbound = String(action?.['outbound'] ?? 'direct');
   if (outbound === 'direct') return t('routing.direct');
   if (outbound === 'block') return t('routing.block');
   const tunnel = tunnels.find((entry) => String(entry['id']) === outbound);
-  return tunnel ? `${String(tunnel['name'] ?? outbound)} · ${protocolTitle(tunnel['protocol'])}` : outbound;
+  if (tunnel) return `${String(tunnel['name'] ?? outbound)} · ${protocolTitle(tunnel['protocol'])}`;
+  const group = groups.find((entry) => String(entry['id']) === outbound);
+  return group ? `${String(group['name'] ?? outbound)} · group` : outbound;
 }

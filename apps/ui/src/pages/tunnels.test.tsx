@@ -74,7 +74,6 @@ const restartCalls: string[] = [];
 const openvpn = (over: Tunnel = {}): Tunnel => ({
   id: 't1',
   name: 'Amsterdam egress',
-  role: 'alternative',
   enabled: true,
   protocol: 'openvpn',
   config: { profile: { $set: true } },
@@ -147,7 +146,6 @@ describe('the obfuscation entry points, which nothing ever walked', () => {
   const cloak = (): Tunnel => ({
     id: 't1',
     name: 'Corporate',
-    role: 'resource',
     enabled: true,
     protocol: 'cloak-openvpn',
     config: {
@@ -205,7 +203,6 @@ describe('VLESS: a link, and never a question about what runs it', () => {
   const vless = (): Tunnel => ({
     id: 't1',
     name: '',
-    role: 'alternative',
     enabled: true,
     protocol: 'vless',
     config: { server: 'old.example', port: 1, id: { $set: true }, network: 'tcp', security: 'tls' },
@@ -326,38 +323,38 @@ describe('what happens when a tunnel fails is on the screen about tunnels', () =
   });
 });
 
-describe('where tunnels come from, which is not the same act as pasting one', () => {
+describe('a group: a subscription, whose members are what the feed offers', () => {
   const feed = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    id: 'subscription-01',
+    id: 'group-01',
     name: 'Provider feed',
     enabled: true,
     url: { $set: true },
-    refreshHours: 24,
+    refreshHours: 1,
+    onUnavailable: 'block',
+    members: [],
     ...over,
   });
 
   const withFeeds = (feeds: Record<string, unknown>[], tunnels: Tunnel[] = []): Record<string, unknown> => ({
     ...documentWith(tunnels),
-    subscriptions: feeds,
+    groups: feeds,
   });
 
   /*
-   * The count on the feed is the other side of the badge on a tunnel. Mutated to count every tunnel
-   * rather than the ones naming this feed, it reports two where one is true — which is the number
-   * somebody reads before removing a feed.
+   * The members are drawn, read-only: they are the feed's, and the next refresh replaces them. Mutated
+   * to draw nothing, a person cannot see which nodes the device is choosing among.
    */
-  it('says how many of the tunnels above it made', async () => {
-    await renderScreen(
-      <Tunnels />,
-      withFeeds(
-        [feed()],
-        [
-          openvpn({ id: 't1', derivedFrom: { subscription: 'subscription-01', node: 'a' } }),
-          openvpn({ id: 't2', name: 'By hand' }),
-        ],
-      ),
-    );
-    expect(await screen.findByText(/1 above/)).toBeTruthy();
+  it('lists its members by name and endpoint', async () => {
+    const members = [
+      { id: 'de', name: 'Germany · Frankfurt', node: 'vless://198.51.100.1:8080', protocol: 'vless', config: {} },
+      { id: 'pl', name: 'Poland · Warsaw', node: 'vless://198.51.100.2:8080', protocol: 'vless', config: {} },
+    ];
+    await renderScreen(<Tunnels />, withFeeds([feed({ members })]));
+    expect(await screen.findByText(/Germany · Frankfurt/)).toBeTruthy();
+    expect(screen.getByText(/Poland · Warsaw/)).toBeTruthy();
+    expect(screen.getByText('2 member(s)')).toBeTruthy();
+    // No member field is a control.
+    expect(document.querySelector('[data-pointer^="/groups/0/members"]')).toBeNull();
   });
 
   /*
@@ -371,35 +368,30 @@ describe('where tunnels come from, which is not the same act as pasting one', ()
 
   /*
    * The two acts must not read as one. A person who confuses them pastes a feed into a tunnel and
-   * wonders why it never updates, or stores a one-off link and finds an edited tunnel replaced
-   * overnight. Asserted as: the feed's address control and the tunnel's paste box are different
-   * controls with different words, and only one of them writes to the document.
+   * wonders why it never updates, or stores a one-off link and finds it replaced. Asserted as: the
+   * feed's address control and the tunnel's paste box are different controls with different words, and
+   * only one of them writes to the document.
    */
   it('keeps the stored feed and the one-off paste apart', async () => {
     await renderScreen(<Tunnels />, withFeeds([feed()], [{ ...openvpn(), protocol: 'vless', config: { server: 'a', port: 1, network: 'tcp', security: 'tls' } }]));
     await screen.findByText('Provider feed');
-    // The paste box is not a position in the document, so it is not a `Field` and carries no pointer
-    // of its own. Asserted against `.field-block` rather than against any `[data-pointer]` ancestor,
-    // because the list containing the tunnel is one — and climbing to it would pass for the wrong
-    // reason on a paste box that had been stamped.
     expect(screen.getByPlaceholderText('vless://…').closest('.field-block')).toBeNull();
-    expect(document.querySelector('[data-pointer="/subscriptions/0/url"]')).toBeTruthy();
-    // And neither control borrows the other's words.
+    expect(document.querySelector('[data-pointer="/groups/0/url"]')).toBeTruthy();
     expect(screen.getByText('Feed address')).toBeTruthy();
     expect(screen.getByText('Paste a link')).toBeTruthy();
   });
 
   /*
    * Zero hours is "only when you ask", which is a value and not an empty box. Mutated to write `0`
-   * as undefined, the field falls back to the schema's 24-hour default and the device refreshes a
-   * feed somebody deliberately stopped.
+   * as undefined, the field falls back to the schema's default and the device refreshes a feed
+   * somebody deliberately stopped.
    */
   it('stores a refresh interval of zero as a choice', async () => {
     await renderScreen(<Tunnels />, withFeeds([feed()]));
     await screen.findByText('Provider feed');
-    const hours = document.querySelector('[data-pointer="/subscriptions/0/refreshHours"] input');
+    const hours = document.querySelector('[data-pointer="/groups/0/refreshHours"] input');
     fireEvent.change(hours as HTMLInputElement, { target: { value: '0' } });
-    expect((useDraft.getState().draft!['subscriptions'] as Record<string, unknown>[])[0]!['refreshHours']).toBe(0);
+    expect((useDraft.getState().draft!['groups'] as Record<string, unknown>[])[0]!['refreshHours']).toBe(0);
   });
 });
 
@@ -413,7 +405,6 @@ describe('one proxy screen, three things it can speak', () => {
   const proxy = (config: Record<string, unknown>): Tunnel => ({
     id: 'ru',
     name: 'Russian proxy',
-    role: 'alternative',
     enabled: true,
     onUnavailable: 'block',
     protocol: 'proxy',

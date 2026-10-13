@@ -21,7 +21,7 @@
  * configuration they actually need.
  */
 
-import { VIA_FAILOVER, type ProfileDocument } from '@wayfarer/schemas';
+import { carrierById, carriers, egressOf, resourceCarriers, VIA_FAILOVER, type ProfileDocument, type ResourceCarrier } from '@wayfarer/schemas';
 import type { Inventory, RadioInventory } from '../inventory/index.ts';
 import type { Resolution } from './binding.ts';
 import { bandCapabilities } from './radio-capabilities.ts';
@@ -244,20 +244,19 @@ function checkResourceTunnelReach(input: InvariantInput): Finding[] {
   /** Ranges in the document that would take one of our own networks with them, and where they came from. */
   const claims: { cidr: string; mine: { cidr: string; what: string }; pointer: string; label: string }[] = [];
 
-  profile.tunnels.forEach((tunnel, index) => {
-    if (!tunnel.enabled || tunnel.role !== 'resource') return;
+  for (const { tunnel, base } of resourceEntries(profile)) {
     (tunnel.resources?.ipCidr ?? []).forEach((value, cidrIndex) => {
       for (const mine of own) {
         if (!covers(value, mine.cidr)) continue;
         claims.push({
           cidr: value,
           mine,
-          pointer: `/tunnels/${index}/resources/ipCidr/${cidrIndex}`,
+          pointer: `${base}/resources/ipCidr/${cidrIndex}`,
           label: `"${tunnel.name}"`,
         });
       }
     });
-  });
+  }
 
   if (claims.length === 0) return findings;
 
@@ -321,11 +320,22 @@ function checkResourceTunnelReach(input: InvariantInput): Finding[] {
  * legal-but-surprising configuration, it is one that cannot do what it says. A partial overlap warns,
  * because splitting a range across two tunnels is a real thing an operator may mean.
  */
+/**
+ * Every enabled tunnel and group that declares resources, in the order the resources anchor emits them
+ * (tunnels, then groups — `resourceCarriers`), with the pointer of each in the stored document.
+ */
+function resourceEntries(profile: ProfileDocument): { tunnel: { id: string; name: string; resources?: ResourceCarrier['resources'] }; base: string }[] {
+  const tunnelIndex = new Map(profile.tunnels.map((tunnel, index) => [tunnel.id, index]));
+  const groupIndex = new Map((profile.groups ?? []).map((group, index) => [group.id, index]));
+  return resourceCarriers(profile).map((carrier) => ({
+    tunnel: { id: carrier.id, name: carrier.name, resources: carrier.resources },
+    base: carrier.kind === 'tunnel' ? `/tunnels/${String(tunnelIndex.get(carrier.id))}` : `/groups/${String(groupIndex.get(carrier.id))}`,
+  }));
+}
+
 function checkTunnelResourceOrder({ profile }: InvariantInput): Finding[] {
   const findings: Finding[] = [];
-  const resources = profile.tunnels
-    .map((tunnel, index) => ({ tunnel, index }))
-    .filter((entry) => entry.tunnel.enabled && entry.tunnel.role === 'resource');
+  const resources = resourceEntries(profile);
 
   for (let earlier = 0; earlier < resources.length; earlier += 1) {
     for (let later = earlier + 1; later < resources.length; later += 1) {
@@ -342,7 +352,7 @@ function checkTunnelResourceOrder({ profile }: InvariantInput): Finding[] {
               `"${a.tunnel.name}" (${a.tunnel.id}) claims ${wide}, which contains ${narrow} claimed by ` +
               `"${b.tunnel.name}" (${b.tunnel.id}). Because it is listed first, it takes that traffic and ` +
               `"${b.tunnel.name}" never receives any — it will connect, look healthy, and carry nothing.`,
-            pointer: `/tunnels/${b.index}/resources/ipCidr`,
+            pointer: `${b.base}/resources/ipCidr`,
             hint:
               `List "${b.tunnel.name}" before "${a.tunnel.name}". The narrower range has to come first, ` +
               'because the first matching rule wins.',
@@ -361,7 +371,7 @@ function checkTunnelResourceOrder({ profile }: InvariantInput): Finding[] {
               `"${a.tunnel.name}" (${a.tunnel.id}) claims the suffix "${wide}", which already matches ` +
               `"${narrow}" claimed by "${b.tunnel.name}" (${b.tunnel.id}). Listed first, it takes those ` +
               `names and "${b.tunnel.name}" never receives them.`,
-            pointer: `/tunnels/${b.index}/resources/domainSuffix`,
+            pointer: `${b.base}/resources/domainSuffix`,
             hint: `List "${b.tunnel.name}" before "${a.tunnel.name}", so the more specific suffix is tried first.`,
             detail: { earlier: a.tunnel.id, later: b.tunnel.id, wide, narrow },
           });
@@ -965,29 +975,33 @@ function checkRegulatory({ profile, inventory, bindings }: InvariantInput): Find
  */
 function checkTunnelVia({ profile }: InvariantInput): Finding[] {
   const findings: Finding[] = [];
-  const byId = new Map(profile.tunnels.map((tunnel) => [tunnel.id, tunnel]));
-  const viaOf = (tunnel: { protocol: string; config: unknown }): string | undefined =>
-    tunnel.protocol === 'openvpn' ? (tunnel.config as { via?: string }).via : undefined;
+  const viaOf = (id: string): string | undefined => {
+    const carrier = carrierById(profile, id);
+    if (carrier?.kind !== 'tunnel' || carrier.tunnel.protocol !== 'openvpn') return undefined;
+    return (carrier.tunnel.config as { via?: string }).via;
+  };
+  const egress = egressOf(profile);
 
   profile.tunnels.forEach((tunnel, index) => {
-    const via = viaOf(tunnel);
+    const via = viaOf(tunnel.id);
     if (via === undefined || !tunnel.enabled) return;
     const pointer = `/tunnels/${index}/config/via`;
 
     if (via === VIA_FAILOVER) {
-      if (tunnel.role === 'alternative' && !profile.policy.excluded.includes(tunnel.id)) {
+      if (egress?.id === tunnel.id) {
         findings.push({
           severity: 'error',
           code: 'tunnel_via_itself',
-          message: `"${tunnel.name}" connects through the selected alternative, and is itself one of them: selected, it would carry its own connection.`,
+          message: `"${tunnel.name}" connects through the egress, and is itself the egress: it would carry its own connection.`,
           pointer,
-          hint: 'Make it a resource tunnel, exclude it from failover, or name a specific tunnel to go through.',
+          hint: 'Name a specific tunnel or group to go through, remove the setting to connect directly, or choose another egress.',
         });
       }
       return;
     }
 
-    const target = byId.get(via);
+    // A tunnel or a group: either is something a connection can go through.
+    const target = carrierById(profile, via);
     if (target === undefined || via === tunnel.id) {
       findings.push({
         severity: 'error',
@@ -995,9 +1009,9 @@ function checkTunnelVia({ profile }: InvariantInput): Finding[] {
         message:
           via === tunnel.id
             ? `"${tunnel.name}" is set to connect through itself.`
-            : `"${tunnel.name}" connects through "${via}", which is not a tunnel in this profile.`,
+            : `"${tunnel.name}" connects through "${via}", which is not a tunnel or group in this profile.`,
         pointer,
-        hint: `Choose another tunnel, "${VIA_FAILOVER}" for the selected alternative, or remove the setting to connect directly.`,
+        hint: `Choose another tunnel or group, "${VIA_FAILOVER}" for the egress, or remove the setting to connect directly.`,
       });
       return;
     }
@@ -1012,7 +1026,7 @@ function checkTunnelVia({ profile }: InvariantInput): Finding[] {
       return;
     }
 
-    // Follow the chain; a tunnel met twice is a loop no unit order can start.
+    // Follow the chain; a tunnel met twice is a loop no unit order can start. A group ends it.
     const path = [tunnel.id];
     for (let next: string | undefined = via; next !== undefined && next !== VIA_FAILOVER; ) {
       if (path.includes(next)) {
@@ -1021,13 +1035,12 @@ function checkTunnelVia({ profile }: InvariantInput): Finding[] {
           code: 'tunnel_via_loop',
           message: `Tunnels connect through each other in a circle: ${[...path, next].join(' → ')}.`,
           pointer,
-          hint: 'Let one of them connect directly or through the selected alternative.',
+          hint: 'Let one of them connect directly or through the egress.',
         });
         break;
       }
       path.push(next);
-      const step = byId.get(next);
-      next = step === undefined ? undefined : viaOf(step);
+      next = viaOf(next);
     }
   });
   return findings;
@@ -1040,91 +1053,88 @@ const RESERVED_OUTBOUNDS = new Set(['direct', 'block']);
 
 function checkCrossReferences({ profile }: InvariantInput): Finding[] {
   const findings: Finding[] = [];
-  const tunnelIds = new Set(profile.tunnels.map((tunnel) => tunnel.id));
-  const enabledAlternatives = new Set(
-    profile.tunnels.filter((tunnel) => tunnel.enabled && tunnel.role === 'alternative').map((tunnel) => tunnel.id),
-  );
+  const targetIds = new Set(carriers(profile).map((carrier) => carrier.id));
 
+  /*
+   * One namespace for tunnels, groups and members: each id becomes an outbound tag in the core (a
+   * member's too, and a group's is its selector), and two objects with one tag is a configuration the
+   * core rejects by a name that is correct twice, which is no help.
+   */
+  const ids: { id: string; pointer: string; what: string }[] = [
+    ...profile.tunnels.map((tunnel, index) => ({ id: tunnel.id, pointer: `/tunnels/${index}/id`, what: 'tunnel' })),
+    ...(profile.groups ?? []).map((group, index) => ({ id: group.id, pointer: `/groups/${index}/id`, what: 'group' })),
+    ...(profile.groups ?? []).flatMap((group, g) =>
+      group.members.map((member, m) => ({ id: member.id, pointer: `/groups/${g}/members/${m}/id`, what: 'group member' })),
+    ),
+  ];
   const seen = new Set<string>();
-  profile.tunnels.forEach((tunnel, index) => {
-    if (seen.has(tunnel.id)) {
+  for (const entry of ids) {
+    if (seen.has(entry.id)) {
       findings.push({
         severity: 'error',
         code: 'duplicate_tunnel_id',
-        // A tunnel id becomes the core's outbound tag. Two objects with one tag is a configuration
-        // the core rejects, and it rejects it by name, which is unhelpful when the name is correct.
-        message: `Two tunnels share the id "${tunnel.id}", which becomes a routing tag and must be unique.`,
-        pointer: `/tunnels/${index}/id`,
-        hint: 'Rename one of them.',
+        message: `The id "${entry.id}" is used twice among tunnels, groups and group members; it becomes a routing tag and must be unique.`,
+        pointer: entry.pointer,
+        hint: entry.what === 'group member' ? 'Rename the tunnel or group that uses it.' : 'Rename one of them.',
       });
     }
-    seen.add(tunnel.id);
+    seen.add(entry.id);
 
     // Not a routing target, so not in RESERVED_OUTBOUNDS — a rule naming it would then pass a check the
-    // core would fail. Reserved only as an id, because `config.via` uses the word for "the selection".
-    if (tunnel.id === VIA_FAILOVER) {
+    // core would fail. Reserved only as an id, because `config.via` uses the word for "the egress".
+    if (entry.id === VIA_FAILOVER) {
       findings.push({
         severity: 'error',
         code: 'reserved_tunnel_id',
-        message: `"${VIA_FAILOVER}" is reserved: a tunnel's "via" uses it to mean the selected alternative.`,
-        pointer: `/tunnels/${index}/id`,
-        hint: 'Rename this tunnel.',
+        message: `"${VIA_FAILOVER}" is reserved: a tunnel's "via" uses it to mean the egress.`,
+        pointer: entry.pointer,
+        hint: `Rename this ${entry.what}.`,
       });
     }
-    if (RESERVED_OUTBOUNDS.has(tunnel.id)) {
+    if (RESERVED_OUTBOUNDS.has(entry.id)) {
       findings.push({
         severity: 'error',
         code: 'reserved_tunnel_id',
-        message: `"${tunnel.id}" is a reserved routing target and cannot be a tunnel id.`,
-        pointer: `/tunnels/${index}/id`,
+        message: `"${entry.id}" is a reserved routing target and cannot be an id.`,
+        pointer: entry.pointer,
         hint: `Reserved names: ${[...RESERVED_OUTBOUNDS].join(', ')}.`,
       });
     }
-  });
+  }
 
-  profile.policy.priority.forEach((id, index) => {
-    if (!tunnelIds.has(id)) {
+  const egressId = profile.policy.egress;
+  if (egressId !== undefined) {
+    const egress = carrierById(profile, egressId);
+    if (egress === undefined) {
       findings.push({
         severity: 'error',
         code: 'unknown_tunnel_reference',
-        message: `The failover order names "${id}", which is not a tunnel in this profile.`,
-        pointer: `/policy/priority/${index}`,
-        hint: 'Remove it, or add the tunnel it refers to.',
+        message: `The egress is "${egressId}", which is not a tunnel or group in this profile.`,
+        pointer: '/policy/egress',
+        hint: 'Choose an existing tunnel or group, or clear the egress.',
       });
-    } else if (!enabledAlternatives.has(id)) {
+    } else if (!egress.enabled) {
       findings.push({
         severity: 'warning',
-        code: 'priority_names_non_alternative',
-        message: `"${id}" is in the failover order but is not an enabled alternative, so it will never be selected.`,
-        pointer: `/policy/priority/${index}`,
-        hint: 'Set its role to "alternative" and enable it, or remove it from the order.',
+        code: 'egress_disabled',
+        message: `The egress "${egress.name}" is turned off, so traffic no rule names takes "${profile.policy.onAllDown}".`,
+        pointer: '/policy/egress',
+        hint: `Turn "${egress.name}" on, or choose another egress.`,
       });
     }
-  });
-
-  profile.policy.excluded.forEach((id, index) => {
-    if (!tunnelIds.has(id)) {
-      findings.push({
-        severity: 'warning',
-        code: 'unknown_tunnel_reference',
-        message: `The exclusion list names "${id}", which is not a tunnel in this profile.`,
-        pointer: `/policy/excluded/${index}`,
-        hint: 'Remove it. An exclusion for a tunnel that does not exist has no effect.',
-      });
-    }
-  });
+  }
 
   const ruleSetTags = new Set(profile.routing.ruleSets.map((set) => set.tag));
   profile.routing.rules.forEach((rule, index) => {
     if ('action' in rule) {
       const target = rule.action.outbound;
-      if (!RESERVED_OUTBOUNDS.has(target) && !tunnelIds.has(target)) {
+      if (!RESERVED_OUTBOUNDS.has(target) && !targetIds.has(target)) {
         findings.push({
           severity: 'error',
           code: 'unknown_tunnel_reference',
-          message: `Routing rule ${index + 1} sends traffic to "${target}", which is not a tunnel in this profile.`,
+          message: `Routing rule ${index + 1} sends traffic to "${target}", which is not a tunnel or group in this profile.`,
           pointer: `/routing/rules/${index}/action/outbound`,
-          hint: `Use a tunnel id, or one of: ${[...RESERVED_OUTBOUNDS].join(', ')}.`,
+          hint: `Use a tunnel or group id, or one of: ${[...RESERVED_OUTBOUNDS].join(', ')}.`,
         });
       }
     }

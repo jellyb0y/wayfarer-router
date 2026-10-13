@@ -40,6 +40,7 @@ import {
   type InstalledBinaries,
 } from './catalogue/index.ts';
 import type { TunnelEmission } from './planner.ts';
+import { withMembersAsTunnels } from './groups.ts';
 
 /** The loopback ports this daemon hands out. Stated once, and reported in the message when it runs out. */
 const PORT_RANGE = { first: 10_800, last: 10_899 } as const;
@@ -96,7 +97,9 @@ export interface EmitResult {
   carriers: Map<string, CarrierChoice>;
 }
 
-export function emitTunnels(input: EmitInput): EmitResult {
+export function emitTunnels(raw: EmitInput): EmitResult {
+  // A group's members are emitted as tunnels, after the person's own (`core/groups.ts`).
+  const input = { ...raw, profile: withMembersAsTunnels(raw.profile) };
   const emissions = new Map<string, TunnelEmission>();
   const carriers = new Map<string, CarrierChoice>();
   const refusals: TunnelRefusal[] = [];
@@ -218,7 +221,8 @@ export function validateTunnelConfigs(input: {
 }): TunnelValidationIssue[] {
   const issues: TunnelValidationIssue[] = [];
 
-  input.profile.tunnels.forEach((tunnel, index) => {
+  // Indices are into the expanded list, the same one `plan` reads them back from.
+  withMembersAsTunnels(input.profile).tunnels.forEach((tunnel, index) => {
     if (!tunnel.enabled) return;
     // Outside the catalogue is a refusal, not a validation issue: `emitTunnels` names it, with the
     // sentence every refusal in this epic uses. Reporting it twice in two voices is two defects.

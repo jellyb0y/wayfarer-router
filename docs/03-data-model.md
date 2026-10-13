@@ -85,12 +85,7 @@ the export format, so there is no second serialisation that can drift.
     // the schema: each entry is its own branch of a union, so `vless` beside an
     // OpenVPN configuration matches no branch at all rather than validating cleanly
     // and failing on the device. There is nothing outside the catalogue.
-    { "id": "t-pl", "name": "Warsaw", "role": "alternative", "enabled": true,
-      "protocol": "vless",
-      "config": { "server": "…", "port": 27298, "id": { "$secret": "…" },
-                  "network": "ws", "security": "tls", "path": "/" } },
-
-    { "id": "t-hq", "name": "HQ", "role": "resource", "enabled": true,
+    { "id": "t-hq", "name": "HQ", "enabled": true,
       // One entry, not a tunnel composed with a transport: the two are configured
       // together because they are chosen together.
       "protocol": "cloak-openvpn",
@@ -109,10 +104,19 @@ the export format, so there is no second serialisation that can drift.
                "domainSuffix": [".hq.lan"] } }
   ],
 
-  // ── which alternative wins, and what happens when none does ──
+  // ── groups: a subscription, and the nodes it offers (written by the refresh) ──
+  "groups": [
+    { "id": "feed", "name": "Provider", "enabled": true,
+      "url": { "$secret": "…" }, "refreshHours": 1, "onUnavailable": "block",
+      "members": [
+        { "id": "feed-1", "name": "Warsaw", "node": "vless://…:27298", "protocol": "vless",
+          "config": { "server": "…", "port": 27298, "id": { "$secret": "…" },
+                      "network": "ws", "security": "tls", "path": "/" } } ] }
+  ],
+
+  // ── where unmatched traffic goes, and what happens when nothing there works ──
   "policy": {
-    "priority": ["t-pl"],
-    "excluded": ["t-de"],
+    "egress": "feed",
     "sticky": true,
     // Three thresholds, not one, because latency alone does not describe a usable tunnel: a link at
     // a steady 400 ms works, and one averaging 120 ms while dropping a third of its packets does not.
@@ -204,17 +208,22 @@ the export format, so there is no second serialisation that can drift.
 }
 ```
 
-### Two roles for tunnels, and it is a field rather than an inference
+### Tunnels, groups, and the egress (schema 9)
 
-An **alternative** is interchangeable with other alternatives: it joins the
-failover group, the watchdog switches between them, and unmatched traffic goes to
-whichever is selected. A **resource** is not interchangeable — substituting a
-public proxy for a corporate tunnel is meaningless — so it never joins the group
-and is reached only by explicit rules.
+Two things carry traffic. A **tunnel** is a person's: one endpoint, written by hand. A **group** is a
+subscription: its members are the nodes the feed offers now, and the device keeps the group's traffic on
+one healthy member and moves it when that member fails (`04-tunnels-and-protocols.md`, "Groups").
 
-This is declared, not derived from the protocol. Two VLESS endpoints can be
-alternatives while a third is a resource, and an OpenVPN tunnel could perfectly
-well be an alternative.
+Either can be the **egress** — `policy.egress`, one id, where traffic no rule names goes. Either can carry
+**resources**, the destinations the `tunnel-resources` anchor routes to it. Either can be named by a
+rule or by an OpenVPN `via`. Ids share one namespace with group members, because every one is an outbound
+tag.
+
+Until schema 9 a tunnel had a `role` — `alternative` joined a failover list (`policy.priority`,
+`policy.excluded`), `resource` was reached by rules — and each node of a subscription was a tunnel of its
+own with a `derivedFrom` mark. The list had to be kept in step with the feed by hand and was not: on
+2026-10-13 it named a node the provider had withdrawn. Migration step 8 → 9 turns each subscription and its
+derived tunnels into a group with the same ids, and the first usable entry of the old order into the egress.
 
 ### Ordered rules, and the anchor that protects your own access
 

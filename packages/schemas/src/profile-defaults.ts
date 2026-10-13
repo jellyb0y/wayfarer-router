@@ -49,11 +49,9 @@ export function emptyProfile(options: EmptyProfileOptions = {}): ProfileDocument
       dhcp: { enabled: true, from: '10.44.0.100', to: '10.44.0.200', leaseHours: 12 },
     },
     tunnels: [],
-    // Empty, like tunnels and uplinks: a new profile subscribes to nothing.
-    subscriptions: [],
+    // Empty, like tunnels and uplinks: a new profile subscribes to nothing, and has no egress.
+    groups: [],
     policy: {
-      priority: [],
-      excluded: [],
       sticky: true,
       probes: {
         count: 4,

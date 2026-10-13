@@ -275,9 +275,9 @@ test('a declaration used at several pointers yields a position at each of them',
      * the memo defect, and the assertion below is what now says so out loud.
      */
     Identifier: [
-      '/subscriptions/-/id',
+      '/groups/-/id',
+      '/groups/-/members/-/id',
       '/tunnels/-/config/entryPoints/-/id',
-      '/tunnels/-/derivedFrom/subscription',
       '/tunnels/-/id',
       '/uplinks/-/id',
     ],
@@ -408,7 +408,7 @@ test('an array of objects is descended into, and an array of scalars is itself t
     '/tunnels/-/config/entryPoints/-/host',
     '/uplinks/-/config/ssid',
     '/routing/rules/-/kind',
-    '/subscriptions/-/url',
+    '/groups/-/url',
     '/firewall/blockedEndpoints/-/domain',
   ]) {
     assert.ok(
@@ -418,7 +418,7 @@ test('an array of objects is descended into, and an array of scalars is itself t
     );
   }
 
-  const containers = ['/uplinks', '/tunnels', '/subscriptions', '/routing/rules', '/routing/ruleSets', '/firewall/blockedEndpoints'];
+  const containers = ['/uplinks', '/tunnels', '/groups', '/groups/-/members', '/routing/rules', '/routing/ruleSets', '/firewall/blockedEndpoints'];
   assert.deepEqual(
     containers.filter((pointer) => pointers.has(pointer)),
     [],
@@ -429,8 +429,6 @@ test('an array of objects is descended into, and an array of scalars is itself t
   /* Scalars: the list is the position, and the element is not. */
   const scalarLists = [
     '/firewall/blockedEndpoints/-/ports',
-    '/policy/excluded',
-    '/policy/priority',
     '/policy/probes/endpoints',
     '/routing/rules/-/cidrs',
     '/routing/rules/-/domains',
@@ -570,8 +568,16 @@ test('an exempting mark removes a position from the required set and an unmarked
      * 123 → 124 on 2026-10-12: `/tunnels/-/config/via` (plain OpenVPN) joined. A server reachable only
      * from abroad needs the tunnel's own connection to go through another tunnel, and the owner chooses
      * which.
+     *
+     * 2026-10-14, schema 9: a subscription is a group. `person` 124 → 128: `/tunnels/-/role`,
+     * `/policy/priority` and `/policy/excluded` left (−3); `/policy/egress` joined, and a group carries
+     * what a resource tunnel carried — `resources/domainSuffix`, `resources/ipCidr`, `dns/server`,
+     * `dns/dynamic`, `dns/domainSuffix`, `onUnavailable` (+7). `generated` 7 → 8: `/groups/-/members/-/id`.
+     * `subscription` 2 → 18: `/tunnels/-/derivedFrom/*` left (−2), and a member's `name`, `node`,
+     * `protocol` and the fifteen leaves of its VLESS configuration joined — the feed writes them, so
+     * none asks for a control.
      */
-    { person: 124, generated: 7, device: 4, subscription: 2, catalogue: 1 },
+    { person: 128, generated: 8, device: 4, subscription: 18, catalogue: 1 },
     'the source distribution changed. That is not necessarily wrong, but it is never incidental: ' +
       'every entry here is a decision about whether a person must be given a control. Re-derive it ' +
       'and say in the diff which field moved and why.',
@@ -584,8 +590,9 @@ test('an exempting mark removes a position from the required set and an unmarked
 
   const exempt: Array<[string, string]> = [
     ['/services/clashApi/bind', 'catalogue'],
-    ['/subscriptions/-/lastRefresh/ok', 'device'],
-    ['/tunnels/-/derivedFrom/subscription', 'subscription'],
+    ['/groups/-/lastRefresh/ok', 'device'],
+    ['/groups/-/members/-/node', 'subscription'],
+    ['/groups/-/members/-/config/server', 'subscription'],
     ['/schemaVersion', 'generated'],
   ];
   for (const [pointer, source] of exempt) {
@@ -612,10 +619,11 @@ test('an exempting mark removes a position from the required set and an unmarked
   assert.deepEqual(
     all.filter((entry) => entry.source === 'generated').map((entry) => entry.pointer),
     [
+      '/groups/-/id',
+      '/groups/-/members/-/id',
       '/meta/createdAt',
       '/meta/updatedAt',
       '/schemaVersion',
-      '/subscriptions/-/id',
       '/tunnels/-/config/entryPoints/-/id',
       '/tunnels/-/id',
       '/uplinks/-/id',
@@ -630,8 +638,8 @@ test('an exempting mark removes a position from the required set and an unmarked
   }
 
   /* A secret is required by the refusal whatever its source says, which is layer 1's whole point. */
-  assert.equal(positions.get('/subscriptions/-/url')?.source, 'person');
-  assert.equal(required.get('/subscriptions/-/url')?.layer, 'refusal');
+  assert.equal(positions.get('/groups/-/url')?.source, 'person');
+  assert.equal(required.get('/groups/-/url')?.layer, 'refusal');
 });
 
 /**

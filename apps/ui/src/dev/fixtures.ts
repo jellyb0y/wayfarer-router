@@ -328,7 +328,7 @@ export function extremeProfiles(): Record<string, unknown> {
           { pointer: '/accessPoint/passphrase', kind: 'psk' },
           { pointer: '/uplinks/0/config/psk', kind: 'psk' },
           { pointer: '/tunnels/0/config/credentials/password', kind: 'password' },
-          { pointer: '/subscriptions/0/url', kind: 'subscription-url' },
+          { pointer: '/groups/0/url', kind: 'subscription-url' },
         ],
       },
     ],
@@ -485,16 +485,13 @@ export function extremeProfileDocument(): Record<string, unknown> {
       const common = {
         id: `tunnel-${String(index + 1).padStart(2, '0')}`,
         name,
-        // Every fifth rather than every fourth, so the role is **not** perfectly correlated with
-        // the protocol: at `% protocols.length` every resource tunnel was an OpenVPN tunnel, and a
-        // control that only appears for one combination of the two would have gone unmeasured.
-        role: index % 5 === 0 ? 'resource' : 'alternative',
         // Not the tunnel that carries a special case below: the one disabled tunnel exists to
         // measure the disabled state, and pinning it to an index that another rule also claims makes
         // one fixture answer two questions and neither of them clearly.
         enabled: index !== 1,
         // The field that never had a control: what this tunnel exists to reach. Same words as a
-        // routing rule, different pointer — which is how it stayed invisible.
+        // routing rule, different pointer — which is how it stayed invisible. Every fifth rather than
+        // every fourth, so a tunnel with resources is not perfectly correlated with its protocol.
         resources:
           index % 5 === 0
             ? { domainSuffix: [LONGEST_DOMAIN, 'internal.example'], ipCidr: [LONGEST_CIDR, '10.0.0.0/8'] }
@@ -508,12 +505,6 @@ export function extremeProfileDocument(): Record<string, unknown> {
         dns:
           index % 5 === 0
             ? { server: '10.0.0.53', dynamic: true, domainSuffix: [LONGEST_DOMAIN, 'internal.example'] }
-            : undefined,
-        // One tunnel that came from a subscription rather than from a person, so the row that says a
-        // refresh will replace it is drawn and measured.
-        derivedFrom:
-          index === 2
-            ? { subscription: 'subscription-01', node: `${LONGEST_DOMAIN}#${'n'.repeat(120)}` }
             : undefined,
       };
       if (protocol === 'openvpn') {
@@ -706,21 +697,34 @@ export function extremeProfileDocument(): Record<string, unknown> {
      * One has been read successfully and one has failed, because the row prints a different sentence
      * for each and the failure's detail is the longer of the two.
      */
-    subscriptions: [
+    groups: [
       {
-        id: 'subscription-01',
+        id: 'group-01',
         name: LONGEST_NAME,
         enabled: true,
         url: { $set: true },
-        refreshHours: 24,
+        refreshHours: 1,
+        onUnavailable: 'block',
+        resources: { domainSuffix: [LONGEST_DOMAIN, 'claude.example'] },
+        // Members are the feed's and have no controls, but they are drawn, so they are measured: the
+        // longest name and node identity the schema permits.
+        members: Array.from({ length: 3 }, (_unused, member) => ({
+          id: `group-01-${member + 1}`,
+          name: LONGEST_NAME,
+          node: `vless://${LONGEST_DOMAIN}:${443 + member}`,
+          protocol: 'vless',
+          config: { server: LONGEST_DOMAIN, port: 443 + member, id: { $set: true }, network: 'tcp', security: 'tls' },
+        })),
         lastRefresh: { at: '2026-09-21T09:14:02Z', ok: true, detail: '', nodeCount: 42 },
       },
       {
-        id: 'subscription-02',
+        id: 'group-02',
         name: LONGEST_NAME,
         enabled: false,
         url: { $redacted: 'subscription-url' },
         refreshHours: 0,
+        onUnavailable: 'fall-through',
+        members: [],
         lastRefresh: {
           at: '2026-09-21T09:14:02Z',
           ok: false,
@@ -746,8 +750,7 @@ export function extremeProfileDocument(): Record<string, unknown> {
      */
     policy: {
       onAllDown: 'direct',
-      priority: ['tunnel-01', 'tunnel-02'],
-      excluded: ['tunnel-03'],
+      egress: 'group-01',
       sticky: false,
       probes: {
         count: 4,
@@ -875,7 +878,7 @@ export function extremeObservers(): Record<string, unknown> {
       },
       {
         name: 'tunnel-watchdog',
-        watches: 'each tunnel’s health: to move traffic off a failing alternative, and to report whether each destination tunnel is alive',
+        watches: 'each group member’s health: to keep each group on a healthy member, and to report whether each destination tunnel is alive',
         everySeconds: 30,
         state: 'failing',
         problem: `traffic for ${LONGEST_DOMAIN} is being refused: its selector is on block; partner (14 round(s)) reads dead; the guard does not block it, its traffic fails rather than leaving another way`,

@@ -247,7 +247,7 @@ test('the anchor that contributes nothing is still shown in the preview', () => 
   const entries = generateRoutingRules(profile, { uplinkInterfaces: [], uplinkNetworks: [] });
   const note = entries.find((entry) => entry.rule === null);
   assert.ok(note, 'the tunnel-resources anchor should still produce a preview row');
-  assert.match(note.summary, /no enabled resource tunnel declares any resources/);
+  assert.match(note.summary, /no enabled tunnel or group declares any resources/);
 });
 
 /* ── the resolver clients are told to use must exist ─────────────────────────────────────── */

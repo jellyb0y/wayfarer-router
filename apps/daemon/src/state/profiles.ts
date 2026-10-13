@@ -213,7 +213,7 @@ export interface ProfileStore {
   create(document: unknown): ProfileRow;
   replace(id: string, document: unknown): ProfileRow;
   /**
-   * Writes what this device learned by fetching one subscription — `/subscriptions/i/lastRefresh` and
+   * Writes what this device learned by fetching one subscription — `/groups/i/lastRefresh` and
    * nothing else — **without** counting as an edit.
    *
    * Not `replace`, because `replace` bumps the revision, and the revision is how safe mode tells an
@@ -530,12 +530,12 @@ export function createProfileStore(
     recordSubscriptionRefresh(id, subscriptionId, lastRefresh) {
       const row = store.get(id);
       if (row === null) return false;
-      const document = row.document as { subscriptions?: Record<string, unknown>[] };
-      const index = (document.subscriptions ?? []).findIndex((entry) => entry['id'] === subscriptionId);
+      const document = row.document as { groups?: Record<string, unknown>[] };
+      const index = (document.groups ?? []).findIndex((entry) => entry['id'] === subscriptionId);
       if (index < 0) return false;
       const next = {
         ...document,
-        subscriptions: document.subscriptions!.map((entry, at) => (at === index ? { ...entry, lastRefresh } : entry)),
+        groups: document.groups!.map((entry, at) => (at === index ? { ...entry, lastRefresh } : entry)),
       };
       const wrapped = wrapSecrets(next, matchersFor(next)) as Record<string, unknown>;
       assertProfileDocument(wrapped);
@@ -732,7 +732,7 @@ export function createProfileStore(
         )
         .get() as Record<string, unknown> | undefined;
       if (!row || row['document_after'] === null) return null;
-      return JSON.parse(String(row['document_after']));
+      return currentShape(JSON.parse(String(row['document_after'])));
     },
   };
 
@@ -767,8 +767,8 @@ function toTransaction(row: Record<string, unknown>): TransactionRow {
   return {
     id: String(row['id']),
     profileId: row['profile_id'] === null ? null : String(row['profile_id']),
-    documentBefore: row['document_before'] === null ? null : JSON.parse(String(row['document_before'])),
-    documentAfter: row['document_after'] == null ? null : JSON.parse(String(row['document_after'])),
+    documentBefore: row['document_before'] === null ? null : currentShape(JSON.parse(String(row['document_before']))),
+    documentAfter: row['document_after'] == null ? null : currentShape(JSON.parse(String(row['document_after']))),
     revertUnit: row['revert_unit'] == null ? null : String(row['revert_unit']),
     takeover: parseTakeover(row['takeover']),
     kind: String(row['kind']),
@@ -812,3 +812,22 @@ function parseTakeover(value: unknown): TakeoverRecord[] {
 }
 
 export type { TransactionState };
+
+/**
+ * A document a transaction recorded, migrated to the current schema on the way out.
+ *
+ * A transaction keeps the document it applied **as it was then**, and the readers of that copy — the
+ * follower, `way rederive` at boot, a revert, safe mode — plan it with this build. Unmigrated, a schema-8
+ * copy planned under schema 9 has no `policy.egress` and no `groups`: the main selector would hold only
+ * the fallback, and every client would be refused. Found by reading the readers before the schema-9
+ * deploy, 2026-10-14, not by a device. A copy that will not migrate is returned as it is, and its
+ * planning fails loudly downstream rather than here, in a read.
+ */
+function currentShape(document: unknown): unknown {
+  try {
+    return migrateProfile(document).document;
+  } catch {
+    return document;
+  }
+}
+

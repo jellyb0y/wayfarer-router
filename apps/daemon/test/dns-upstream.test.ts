@@ -25,7 +25,6 @@ function servers(direct: string): Server[] {
       {
         id: 'corp',
         name: 'Corp',
-        role: 'resource',
         enabled: true,
         onUnavailable: 'block',
         protocol: 'openvpn',

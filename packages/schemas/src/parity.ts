@@ -68,7 +68,7 @@
  */
 
 import { ProfileDocument } from './profile.ts';
-import { secretMatchers } from './secret-transforms.ts';
+import { isFeedWrittenPointer, secretMatchers } from './secret-transforms.ts';
 import { escapePointerSegment, isRecord, type SecretKind } from './secrets.ts';
 import { sourceOf, type FieldSource } from './source.ts';
 
@@ -169,6 +169,8 @@ export function parityRequirements(root: unknown = ProfileDocument): ParityRequi
   const required = new Map<string, ParityRequirement>();
 
   for (const [pointer, kind] of secretMatchers(root as Record<string, unknown>)) {
+    // A member's credentials come from the feed; see `isFeedWrittenPointer`.
+    if (isFeedWrittenPointer(pointer)) continue;
     required.set(pointer, {
       pointer,
       layer: 'refusal',

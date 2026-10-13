@@ -291,7 +291,10 @@ export function decideSelection(input: SelectionInput): SelectionDecision {
     return {
       select: unranked.tunnelId,
       change: unranked.tunnelId !== input.current,
-      reason: 'no tunnel in the configured order is healthy; chose the best of the rest by latency, jitter and loss',
+      reason:
+        input.priority.length === 0
+          ? 'chose the healthy member with the best latency, jitter and loss'
+          : 'no tunnel in the configured order is healthy; chose the best of the rest by latency, jitter and loss',
       considered,
     };
   }

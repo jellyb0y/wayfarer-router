@@ -36,7 +36,6 @@ function withResourceTunnel(onUnavailable: 'block' | 'fall-through'): ProfileDoc
       {
         id: 'vpn-relay',
         name: 'Relay',
-        role: 'resource',
         enabled: true,
         onUnavailable,
         protocol: 'vless',
@@ -115,7 +114,6 @@ test('a document written before the field migrates to block, not to fall-through
       {
         id: 'vpn-relay',
         name: 'Relay',
-        role: 'resource',
         enabled: true,
         provider: 'openvpn',
         config: { profile: 'client\ndev tun\n' },
@@ -154,7 +152,6 @@ function resourceTunnel(id: string, name: string, over: { ipCidr?: string[]; dom
   return {
     id,
     name,
-    role: 'resource' as const,
     enabled: true,
     onUnavailable: 'block' as const,
     provider: 'openvpn',
@@ -397,7 +394,6 @@ test('a captured resolver is preferred over the profile value, and the differenc
   const tunnel = {
     id: 'hq',
     name: 'HQ',
-    role: 'resource' as const,
     enabled: true,
     onUnavailable: 'block' as const,
     provider: 'openvpn',

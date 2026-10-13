@@ -14,7 +14,6 @@ function tunnel(id: string, extra: Record<string, unknown> = {}, config: Record<
   return {
     id,
     name: id,
-    role: 'resource',
     enabled: true,
     onUnavailable: 'block',
     protocol: 'openvpn',
@@ -25,11 +24,12 @@ function tunnel(id: string, extra: Record<string, unknown> = {}, config: Record<
 }
 
 function alternative(id: string) {
-  return { id, name: id, role: 'alternative', enabled: true, onUnavailable: 'block', protocol: 'vless', config: { server: '198.51.100.1', port: 443, id: 'x', network: 'tcp', security: 'none' } };
+  return { id, name: id, enabled: true, onUnavailable: 'block', protocol: 'vless', config: { server: '198.51.100.1', port: 443, id: 'x', network: 'tcp', security: 'none' } };
 }
 
-function viaFindings(tunnels: unknown[]): { code: string; pointer: string }[] {
-  const profile = { ...emptyProfile(), tunnels } as unknown as ProfileDocument;
+function viaFindings(tunnels: unknown[], egress?: string): { code: string; pointer: string }[] {
+  const base = emptyProfile();
+  const profile = { ...base, tunnels, policy: { ...base.policy, ...(egress === undefined ? {} : { egress }) } } as unknown as ProfileDocument;
   return checkInvariants({
     profile: profile as never,
     bindings: new Map(),
@@ -67,8 +67,8 @@ test('two tunnels connecting through each other are a loop', () => {
   assert.deepEqual([...new Set(codes)], ['tunnel_via_loop']);
 });
 
-test('an alternative going through the selection would carry its own connection when selected', () => {
-  assert.deepEqual(viaFindings([tunnel('hq', { role: 'alternative' }, { via: 'failover' })]), [
+test('the egress going through the egress would carry its own connection', () => {
+  assert.deepEqual(viaFindings([tunnel('hq', {}, { via: 'failover' })], 'hq'), [
     { code: 'tunnel_via_itself', pointer: '/tunnels/0/config/via' },
   ]);
 });

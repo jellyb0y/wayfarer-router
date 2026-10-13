@@ -435,7 +435,7 @@ const en = {
   'tunnels.none': 'No tunnels yet. Everything goes out the ordinary way, and no rule can send traffic anywhere else.',
   'tunnels.allDown': 'If every tunnel fails',
   'tunnels.carries': 'Carries',
-  'tunnels.roleAlternative': 'Anything at all',
+  'tunnels.roleAlternative': 'Whatever is sent to it',
   'tunnels.roleResource': 'Only what it reaches',
   'tunnels.state': 'State',
   'tunnels.on': 'In use',
@@ -444,8 +444,6 @@ const en = {
   'tunnels.healthUnread': 'Not read yet',
   // {0} is a time of day from the viewer's own clock: the device has no RTC and sends a monotonic duration.
   'tunnels.fallingThrough': 'Falling through — traffic is leaving outside the VPN since {0}',
-  'tunnels.from': 'Source',
-  'tunnels.fromSubscription': 'A subscription. A refresh replaces it.',
   'tunnels.remove': 'Remove',
   'tunnels.restart': 'Reconnect',
   'tunnels.restarting': 'Reconnecting…',

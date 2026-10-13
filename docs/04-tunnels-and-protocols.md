@@ -332,13 +332,11 @@ Registry, one parser per scheme, a fixture file per real-world variant, and a te
 that every fixture round-trips.
 
 **Refresh is automatic, on a timer.** A provider that moves an endpoint should not
-require the operator to notice. A tunnel in use whose node disappears from the
-subscription moves to a node the subscription still offers and nothing else uses,
-keeping its id and therefore its place in the priority order; the move is recorded
-as an event. The priority order itself is never edited by a refresh. (Until
-2026-10-14 this said the stored node was kept and re-pointing was "a decision, not a
-side effect"; the bench board then spent a day failing over to a node its provider
-had withdrawn, and the owner decided the feed chooses. See "The timer's half" below.) The existing packages in this area are small and
+require the operator to notice. Since schema 9 a subscription is a group whose
+members are what the feed offers, and the device chooses among them; see "Groups"
+below. (Until 2026-10-14 this said a withdrawn node referenced by the priority order
+was kept and re-pointing was "a decision, not a side effect"; the bench board then
+spent a day failing over to a node its provider had withdrawn.) The existing packages in this area are small and
 young; the parsers are worth writing here with tests rather than taking on a
 dependency whose failure mode is a silently mangled endpoint.
 
@@ -410,75 +408,80 @@ in `EmitResult` because **a transport is not a tunnel**: nothing selects it and 
 Proved on the board with a transport that really listens: `wf-transport@obfs` and `wf-socks@viaobfs` both
 `active enabled`, `LISTEN 127.0.0.1:41000`.
 
-## Subscriptions: where they live, and the nine rules a refresh follows
+## Groups: a subscription is a group of tunnels (schema 9, 2026-10-14)
 
-**Subscriptions live in the profile**, as a top-level list, not in device state. They are configuration,
-they must travel with the document, and the URL usually embeds a credential.
+**A subscription is a group**, stored in the profile at `/groups`: its URL (a secret of kind
+`subscription-url`), its refresh interval, and its **members** — the nodes the feed offers now. A member
+is a catalogue configuration (only VLESS comes from a feed today) with an id, a name and the feed's
+identity for the node (`protocol://server:port`). Every field of a member is written by the refresh and
+marked `subscription`; nothing in the interface edits one.
 
-That URL carries `x-secret` with a kind of its own, `subscription-url`. It is named as its own kind
-because what a person must go and find is *"the subscription link from the provider"* — telling them a
-`token` is missing sends them looking for the wrong thing. The consequences are the ordinary ones for a
-secret here: redacted on read, redacted in an export, and an import that names what is missing.
+Traffic of a group sticks to one healthy member and moves to the healthy member with the best score
+(latency, jitter, loss — `core/health.ts`) when that one fails. There is no order: the members are whatever
+the feed offers. A group is used exactly like a tunnel:
 
-Tunnels derived from a subscription carry `derivedFrom: { subscription, node }`, so a refresh may replace
-only that subscription's derived tunnels and **never a hand-authored one**. The derived mark survives every
-refresh, because it is what makes the next one safe.
+* named by **`/policy/egress`** it carries everything no rule names — one id, a group or a tunnel, not a list;
+* with **`resources`** it carries those destinations, through a guard like any resource tunnel;
+* named by a **routing rule** or an OpenVPN **`via`** it carries that.
 
-`refreshSubscription` is pure — document and parsed nodes in, next document and an account out — with one
-test per rule. The rules worth stating:
+### Why the model changed
 
-* **A dropped node is removed only when nothing references it.** A node that disappears from the feed but
-  is named by policy or by a routing rule moves to a free node, or stays if there is none (see below).
-* **Identity is server, port and protocol**, so a rename is an *update* rather than a delete plus an add —
-  which would break policy naming the old id.
-* **Policy is never edited**, in either direction. A refresh does not reorder failover priority or add to
-  exclusions.
-* **A timer may apply `hot` and `service`, and must stop at `network`.** There is nobody at four in the
-  morning to answer a confirmation window, and an unconfirmed network change reverts three minutes later —
-  so an unattended refresh would take the device down and put it back, on a timer.
-* **Every refresh is recorded in the event ring**, because it is the one path where the device edits its
-  own configuration unasked.
+Before schema 9 each node was a separate tunnel with `derivedFrom`, the failover order was
+`policy.priority` beside them, and the refresh had to keep the two in step. It did that by guessing: keep a
+withdrawn node the list still named, move it to a "free" node, add the rest disabled. On the bench board on
+2026-10-13 the `cryptocat` feed had withdrawn `82.22.50.101:8080`, the node `france` was built from, and
+offered two others; the list went on naming the dead one, and the device failed over to it. The owner's
+model is simpler and has nothing to keep in step: everything a subscription offers is one group.
 
-### The timer's half: when a refresh runs, and whether it lands
+### How it runs
 
-`core/subscription-refresh.ts` is the observer `subscription-refresh`. Every ten minutes it asks which of
-the active profile's subscriptions are due — `refreshHours` since the last success, or one hour after a
-failure — fetches each, runs `refreshSubscription`, and decides whether the result lands. The refusals,
-each of which exists because nobody is watching:
+* **Members are planned as tunnels.** `core/groups.ts` appends each enabled group's members to the tunnel
+  list for one plan — after a person's tunnels, in group and member order — so the catalogue entry, the
+  external carrier, its unit and its loopback port apply unchanged. Ports follow document order
+  (`core/emit.ts`), so a feed adding a node never moves a person's tunnel.
+* **A member that cannot be planned is a warning**, `group_member_unusable`, and is left out of its
+  group's selector. A feed offering one node this build cannot run must not stop the others.
+* **Each group is a selector tagged with the group's id** (`generate/core-config.ts`): its planned members,
+  then `block`. The main selector `wf-selector` holds the egress and the fallback, and nothing else; every
+  consumer of `wf-selector` (`via: failover`, the tunnel resolver, `route.final`, fall-through) is unchanged.
+* **The watchdog chooses per group** (`core/watchdog.ts`): it probes each group's members — groups side by
+  side, members one after another — decides with `decideSelection` and an empty order, and points the
+  group's selector at the result. Then it decides the main selector: egress while any member of an egress
+  group is healthy, the fallback after `failStreak` rounds with none.
+* **Stickiness protects a member that has worked.** A core starts each group on its first member; a member
+  this process has not yet seen healthy is not held for `failStreak` rounds. Measured reason: the board's
+  `claude` feed lists a REALITY node first that never answers, which would otherwise cost a minute or more of
+  Claude after every core restart.
+* **One namespace.** Tunnel, group and member ids are all outbound tags; a collision is
+  `duplicate_tunnel_id`. The migration renames a member that shares its group's id (`claude` had derived a
+  tunnel named `claude`; found by a dry run against the board's profile).
+
+### The refresh
+
+`refreshGroup` (`core/subscriptions.ts`) is pure: the members become the feed's nodes. A node still offered
+keeps its member id and place (matched by identity, so a renamed label is an update); a new node is appended
+as `<group>-<n>`; a dropped one leaves. Nothing outside the group is read or written.
+
+The observer `subscription-refresh` (`core/subscription-refresh.ts`) decides **when** and **whether it
+lands**. Every ten minutes it asks which groups are due — `refreshHours` since the last success (default 1),
+or one hour after a failure — and for each:
 
 * **No trusted clock, no round.** Due is a wall-clock comparison and this board has no RTC battery.
-* **A failed fetch or a feed with no runnable node changes no tunnel.** Only `lastRefresh` records it, with
+* **A failed fetch or a feed with no runnable node changes no member.** Only `lastRefresh` records it, with
   a reason built from the status or error code — never the error text, which can carry the URL.
-* **A tunnel in use whose node the feed dropped moves to a free node** of the same feed — one no other
-  tunnel uses, the same country first (flag or first word of the name), otherwise the first. It keeps its
-  id and its place, so the policy and the rules follow it, and takes the node's configuration and name.
-  With no free node it is kept as it was. Decided by the owner on 2026-10-14, replacing "kept, never
-  re-pointed": the feed had withdrawn the node behind `france` and the device went on failing over to it.
-* **Other new nodes arrive with `enabled: false`** and outside the policy. A feed growing does not start a
-  tunnel nothing needs.
-* **`lastRefresh.ok` means the device runs what the feed says**, not that the fetch worked. A refresh that
-  was held or whose apply failed is `ok: false` and is retried after an hour.
-* **A derived tunnel's configuration is the feed's.** Id, name, role, resources and `enabled` stay as a
-  person set them; the configuration is replaced whole. See the corrected note on `VlessConfig`.
-* **Not on top of unapplied edits.** If the active profile differs from the last applied document in
-  anything but `lastRefresh`, the refresh is held: applying it would apply the edit too.
-* **Plan first, store only what may be applied.** A plan above `service` is not stored; the event
-  `subscription.refresh-held` names what it would have changed.
-* **An apply that fails puts the previous document back**, so the stored profile stays what the device runs.
-* **`lastRefresh` is not an edit.** It is written by `recordSubscriptionRefresh`, which leaves the profile
-  revision alone; a change of tunnels goes through `replace` and bumps it.
+* **`lastRefresh.ok` means the device runs what the feed says.** Held or failed to apply is `ok: false`,
+  retried after an hour.
+* **Not on top of unapplied edits.** If the active profile differs from the last applied one in anything
+  but `lastRefresh`, the refresh is held: applying it would apply the edit too.
+* **Plan first, apply only `hot` and `service`.** A plan needing a confirmation window is not stored; the
+  event `subscription.refresh-held` says what it would have changed. Adding or removing a member rewrites
+  the core's configuration and restarts it (`service`): expected, and rare.
+* **An apply that fails puts the previous document back.**
+* **`lastRefresh` is not an edit.** `recordSubscriptionRefresh` leaves the profile revision alone, so safe
+  mode's count of failures is not reset twice a day by a timer.
 
-Events: `subscription.refreshed`, `subscription.fetch-failed`, `subscription.node-withdrawn`,
-`subscription.refresh-held`, `subscription.refresh-failed`.
-
-### The review finding: deletion followed by refusal
-
-A refresh could **delete a tunnel a routing rule still named**, and then refuse to apply — leaving the
-tunnel already gone.
-
-The referenced set is now built from policy **and** from the routing rules, read off `action.outbound`
-wherever it appears rather than from a list of rule kinds. A list of kinds would be a second description of
-the schema and would stop covering a kind added later, which is exactly how this was missed.
+Events: `subscription.refreshed`, `subscription.fetch-failed`, `subscription.refresh-held`,
+`subscription.refresh-failed`; the watchdog's `health.switched` carries `group` when a group moved.
 
 ## OpenVPN's up-script treats the peer as hostile
 

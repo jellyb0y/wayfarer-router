@@ -162,6 +162,22 @@ function tunnelBranchFaults(document: Record<string, unknown>): ProfileFault[] {
      * about the one thing a person holding an old draft or an old script needs to know: that the field
      * was removed on purpose and nothing replaces it. See `profile-migrations.ts`, step 7.
      */
+    // Removed by schema 9 (`profile-migrations.ts`, step 8). See `Group`.
+    for (const removed of ['role', 'derivedFrom'] as const) {
+      if (!(removed in tunnel)) continue;
+      faults.push({
+        code: 'tunnel_field_removed',
+        message:
+          removed === 'role'
+            ? 'A tunnel no longer takes "role". A tunnel with "resources" carries those destinations; the ' +
+              'main egress is named once, at /policy/egress.'
+            : 'A tunnel no longer takes "derivedFrom". What a subscription offers is the members of its ' +
+              'group (/groups/-/members), never a tunnel.',
+        pointer: `/tunnels/${index}/${removed}`,
+        hint: `Remove "${removed}" from this tunnel. Stored profiles lose it by migration.`,
+      });
+    }
+    if ('role' in tunnel || 'derivedFrom' in tunnel) return;
     if ('probe' in tunnel) {
       faults.push({
         code: 'tunnel_field_removed',
@@ -206,6 +222,28 @@ export function catalogueConfigFaults(
 /* ── 3. the whole document ───────────────────────────────────────────────────────────────── */
 
 function documentFaults(document: Record<string, unknown>): ProfileFault[] {
+  // Removed by schema 9, refused by name for the same reason as a tunnel's removed fields.
+  const policy = isRecord(document['policy']) ? document['policy'] : {};
+  const removed: ProfileFault[] = [];
+  if ('subscriptions' in document) {
+    removed.push({
+      code: 'field_removed',
+      message: 'A profile no longer has "subscriptions": each subscription is a group, at /groups.',
+      pointer: '/subscriptions',
+      hint: 'Move each subscription to /groups. Stored profiles are moved by migration.',
+    });
+  }
+  for (const key of ['priority', 'excluded'] as const) {
+    if (!(key in policy)) continue;
+    removed.push({
+      code: 'field_removed',
+      message: `The policy no longer has "${key}": the egress is one group or tunnel, at /policy/egress.`,
+      pointer: `/policy/${key}`,
+      hint: 'Name the egress at /policy/egress. Stored profiles are moved by migration.',
+    });
+  }
+  if (removed.length > 0) return removed;
+
   // The four top-level sections are answered first and by name. TypeBox reports them as
   // `Expected required property`, which is correct and tells a person nothing about where a
   // complete document comes from.

@@ -90,18 +90,21 @@ export function OpenVpnFileFields({
 function ConnectVia({ index, tunnel }: { index: number; tunnel: Tunnel }): ReactElement {
   const document = useDraft((state) => state.draft);
   const tunnels = (readAt(document, '/tunnels') as Tunnel[] | undefined) ?? [];
+  const groups = (readAt(document, '/groups') as Record<string, unknown>[] | undefined) ?? [];
   const config = (tunnel['config'] as Record<string, unknown>) ?? {};
-  const others = tunnels
-    .filter((other) => other['id'] !== tunnel['id'] && other['enabled'] !== false)
-    .map((other) => ({ value: String(other['id']), title: `Through ${String(other['name'] ?? other['id'])}` }));
+  // A tunnel or a group: either can carry another tunnel's connection.
+  const others = [
+    ...groups.filter((group) => group['enabled'] !== false),
+    ...tunnels.filter((other) => other['id'] !== tunnel['id'] && other['enabled'] !== false),
+  ].map((other) => ({ value: String(other['id']), title: `Through ${String(other['name'] ?? other['id'])}` }));
   return (
     <SelectField
       pointer={`/tunnels/${index}/config/via`}
       label="Connect"
       value={config['via']}
-      options={[{ value: 'failover', title: 'Through the active tunnel' }, ...others]}
+      options={[{ value: 'failover', title: 'Through the egress' }, ...others]}
       absent={{ title: 'Directly', write: undefined }}
-      help="For a server that cannot be reached from here. Through the active tunnel, it moves with failover and reconnects through the new one."
+      help="For a server that cannot be reached from here. Through the egress, it follows whichever member its group is on and reconnects when that changes."
     />
   );
 }

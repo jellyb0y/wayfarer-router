@@ -334,9 +334,21 @@ export function droppedSecrets(
  * This is the reason a redacted export is imported rather than rejected. The structure is the
  * valuable part and it transfers; the gaps become explicit instead of hidden.
  */
+/**
+ * Whether a secret position is one the subscription refresh writes: a group member's credentials.
+ *
+ * Such a secret is never a person's to supply, so it is not reported missing — an import without it is
+ * made whole by the next refresh, not by a checklist — and the parity check asks no control for it.
+ * A pointer with concrete indices or with `-` both match.
+ */
+export function isFeedWrittenPointer(pointer: string): boolean {
+  return /^\/groups\/[^/]+\/members\//.test(pointer);
+}
+
 export function missingSecrets(document: unknown, matchers: Map<SecretMatcher, SecretKind>): SecretSite[] {
   const missing: SecretSite[] = [];
   mapSecrets(document, matchers, (value, kind, pointer) => {
+    if (isFeedWrittenPointer(pointer)) return value;
     if (isRedactedSecret(value)) missing.push({ pointer, kind: value.$redacted as SecretKind });
     else if (value === null || value === undefined) missing.push({ pointer, kind });
     else if (isStoredSecret(value) && isEmptySecretValue(value.$secret)) missing.push({ pointer, kind });

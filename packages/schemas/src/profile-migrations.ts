@@ -231,6 +231,130 @@ export const PROFILE_MIGRATIONS: ProfileMigration[] = [
       };
     },
   },
+  {
+    from: 8,
+    name: 'a subscription is a group, and the egress is one id instead of a list',
+    /**
+     * Each subscription becomes a group whose members are the tunnels derived from it; the failover list
+     * becomes one id.
+     *
+     * Why (2026-10-14, the owner's decision): on the bench board the feed had withdrawn the node `france`
+     * was built from and offered others, and the device went on failing over to the dead one because the
+     * list named it. A group's members are what the feed offers; nothing has to be kept in step by hand.
+     *
+     * What it does, in order, each a literal translation:
+     *
+     * 1. `subscriptions[i]` → `groups[i]` with the same id, name, enabled, url, refreshHours, lastRefresh.
+     * 2. Every tunnel whose `derivedFrom.subscription` names it — **enabled or not**, since a group has no
+     *    disabled members — leaves `tunnels` and becomes a member **with the same id**, so the outbound
+     *    tags, unit names and the port order the device runs on do not move. Only VLESS is ever derived;
+     *    anything else keeps its place as a tunnel.
+     * 3. If one of those tunnels carried `resources`, the group takes them with its `dns` and
+     *    `onUnavailable`: a feed whose node was used for named destinations is a group used for them.
+     * 4. `policy.egress` is the first usable entry of the old order — `priority` minus `excluded`, then any
+     *    other enabled `alternative`, as the old selector did — translated to its group when it was a
+     *    derived tunnel. `priority` and `excluded` are removed.
+     * 5. Rule targets and OpenVPN `via` that named a derived tunnel name its group instead.
+     * 6. `role` and `derivedFrom` are removed from the tunnels that remain. An `alternative` keeps no
+     *    `resources`: under schema 9 having resources is what makes a tunnel a resource, and an
+     *    alternative's were never used.
+     * 7. A member whose id is also a group's id is renamed `<group>-<n>`, the first unused. Every id is
+     *    an outbound tag, and a group's tag is its selector. Found by a dry run against the bench
+     *    board's profile, 2026-10-14: the subscription `claude` had derived a tunnel named `claude`.
+     *    The member is renamed rather than the group because nothing names a member, while a rule, a
+     *    `via` or the egress may name the group.
+     */
+    migrate(document) {
+      const tunnels = (Array.isArray(document['tunnels']) ? document['tunnels'] : []).filter(isRecord);
+      const subscriptions = (Array.isArray(document['subscriptions']) ? document['subscriptions'] : []).filter(isRecord);
+      const policy = isRecord(document['policy']) ? document['policy'] : {};
+
+      const groupOf = new Map<string, string>();
+      const groups = subscriptions.map((subscription) => {
+        const id = String(subscription['id']);
+        const derived = tunnels.filter((tunnel) => {
+          const from = tunnel['derivedFrom'];
+          return isRecord(from) && from['subscription'] === id && tunnel['protocol'] === 'vless';
+        });
+        for (const tunnel of derived) groupOf.set(String(tunnel['id']), id);
+        const carrier = derived.find((tunnel) => isRecord(tunnel['resources']));
+        const { lastRefresh } = subscription;
+        return {
+          id,
+          name: subscription['name'],
+          enabled: subscription['enabled'] ?? true,
+          url: subscription['url'],
+          refreshHours: subscription['refreshHours'] ?? 24,
+          ...(carrier !== undefined ? { resources: carrier['resources'] } : {}),
+          ...(carrier !== undefined && carrier['dns'] !== undefined ? { dns: carrier['dns'] } : {}),
+          onUnavailable: carrier?.['onUnavailable'] ?? 'block',
+          members: derived.map((tunnel) => ({
+            id: tunnel['id'],
+            name: tunnel['name'],
+            node: (tunnel['derivedFrom'] as Record<string, unknown>)['node'],
+            protocol: 'vless',
+            config: tunnel['config'],
+          })),
+          ...(lastRefresh !== undefined ? { lastRefresh } : {}),
+        };
+      });
+
+      const groupIds = new Set(groups.map((group) => group.id));
+      const used = new Set<string>([
+        ...groupIds,
+        ...tunnels.map((tunnel) => String(tunnel['id'])),
+      ]);
+      for (const group of groups) {
+        for (const member of group.members) {
+          if (!groupIds.has(String(member.id))) continue;
+          let n = 1;
+          while (used.has(`${group.id}-${String(n)}`)) n += 1;
+          const fresh = `${group.id}-${String(n)}`;
+          member.id = fresh;
+          used.add(fresh);
+        }
+      }
+
+      const renamed = (id: unknown): unknown => (typeof id === 'string' ? groupOf.get(id) ?? id : id);
+      const byId = new Map(tunnels.map((tunnel) => [String(tunnel['id']), tunnel]));
+      const excluded = new Set((Array.isArray(policy['excluded']) ? policy['excluded'] : []).map(String));
+      const usable = (id: string): boolean => {
+        const tunnel = byId.get(id);
+        return tunnel !== undefined && tunnel['enabled'] !== false && tunnel['role'] === 'alternative' && !excluded.has(id);
+      };
+      const order = [
+        ...(Array.isArray(policy['priority']) ? policy['priority'] : []).map(String),
+        ...tunnels.map((tunnel) => String(tunnel['id'])),
+      ];
+      const first = order.find(usable);
+      const { priority: _priority, excluded: _excluded, ...keptPolicy } = policy;
+
+      const remaining = tunnels
+        .filter((tunnel) => !groupOf.has(String(tunnel['id'])))
+        .map((tunnel) => {
+          const { role, derivedFrom: _derivedFrom, ...rest } = tunnel;
+          if (role === 'alternative') delete rest['resources'];
+          const config = rest['config'];
+          if (isRecord(config) && typeof config['via'] === 'string') rest['config'] = { ...config, via: renamed(config['via']) };
+          return rest;
+        });
+
+      const routing = isRecord(document['routing']) ? document['routing'] : {};
+      const rules = (Array.isArray(routing['rules']) ? routing['rules'] : []).map((rule: unknown) => {
+        if (!isRecord(rule) || !isRecord(rule['action'])) return rule;
+        return { ...rule, action: { ...rule['action'], outbound: renamed(rule['action']['outbound']) } };
+      });
+
+      const { subscriptions: _subscriptions, ...rest } = document;
+      return {
+        ...rest,
+        tunnels: remaining,
+        groups,
+        policy: { ...(first !== undefined ? { egress: renamed(first) } : {}), ...keptPolicy },
+        routing: { ...routing, rules },
+      };
+    },
+  },
 ];
 
 export class ProfileVersionError extends Error {

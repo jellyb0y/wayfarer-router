@@ -36,20 +36,6 @@ import { CheckField, ChoiceField, Field, Fold, TextField, TextList } from '../ui
 
 export type Tunnel = Record<string, unknown>;
 
-/** The two roles, each stating what choosing it does rather than naming a category. */
-const ROLES = [
-  {
-    value: 'alternative',
-    title: 'Anything at all',
-    consequence: 'It joins the failover group, which carries whatever no rule sends anywhere else.',
-  },
-  {
-    value: 'resource',
-    title: 'Only what it reaches',
-    consequence: 'It carries only the names and ranges below, and never general traffic.',
-  },
-] as const;
-
 /**
  * What happens to this tunnel's traffic when the tunnel cannot carry it.
  *
@@ -81,16 +67,10 @@ const ON_UNAVAILABLE = [
 ] as const;
 
 export function TunnelCommonFields({ index, tunnel }: { index: number; tunnel: Tunnel }): ReactElement {
-  const draft = useDraft();
   const base = `/tunnels/${index}`;
-  const role = String(tunnel['role'] ?? 'alternative');
-  const dns = tunnel['dns'] as Record<string, unknown> | undefined;
-
   return (
     <>
       <TextField pointer={`${base}/name`} label="Name" value={tunnel['name']} />
-
-      <ChoiceField pointer={`${base}/role`} label="What it carries" value={role} options={ROLES} />
 
       <CheckField
         pointer={`${base}/enabled`}
@@ -99,36 +79,43 @@ export function TunnelCommonFields({ index, tunnel }: { index: number; tunnel: T
         help="Turned off, nothing starts it and no rule reaches it, but the settings are kept."
       />
 
+      <CarrierFields base={base} carrier={tunnel} />
+    </>
+  );
+}
+
+/**
+ * What a tunnel and a group have in common: what they carry, what happens when they cannot, and the
+ * resolver behind them. One component for both, because the schema gives a group exactly a tunnel's
+ * three declarations — a group with resources is routed the way a tunnel with resources is.
+ *
+ * There is no "role" choice since schema 9. Declaring resources is what makes something carry named
+ * destinations; whether it carries everything else is the egress choice, made once, on the policy.
+ */
+export function CarrierFields({ base, carrier }: { base: string; carrier: Record<string, unknown> }): ReactElement {
+  const dns = carrier['dns'] as Record<string, unknown> | undefined;
+  const resources = carrier['resources'] as Record<string, unknown> | undefined;
+  return (
+    <>
+      <TextList
+        pointer={`${base}/resources/domainSuffix`}
+        label="Reaches these names"
+        value={resources?.['domainSuffix'] as string[] | undefined}
+        help="One suffix per line; a name matches only when the connection reveals it. Leave both lists empty for a general exit."
+      />
+      <TextList
+        pointer={`${base}/resources/ipCidr`}
+        label="Reaches these ranges"
+        value={resources?.['ipCidr'] as string[] | undefined}
+        help="The only thing a connection to a literal address, or to an encrypted name, can match."
+      />
+
       <ChoiceField
         pointer={`${base}/onUnavailable`}
         label="If it fails"
-        value={String(tunnel['onUnavailable'] ?? 'block')}
+        value={String(carrier['onUnavailable'] ?? 'block')}
         options={ON_UNAVAILABLE}
       />
-
-      {/*
-        * Shown for a resource tunnel and for no other, because that is the only kind these mean
-        * anything for: `tunnel-resources` expands one routing rule per resource tunnel out of exactly
-        * these two lists. Drawn beside an alternative tunnel they would be two boxes that change
-        * nothing, which is a worse answer than their absence.
-        */}
-      {role === 'resource' ? (
-        <>
-          <TextList
-            pointer={`${base}/resources/domainSuffix`}
-            label="Reaches these names"
-            value={(tunnel['resources'] as Record<string, unknown> | undefined)?.['domainSuffix'] as string[] | undefined}
-            help="One suffix per line; a name matches only when the connection reveals it."
-          />
-          <TextList
-            pointer={`${base}/resources/ipCidr`}
-            label="Reaches these ranges"
-            value={(tunnel['resources'] as Record<string, unknown> | undefined)?.['ipCidr'] as string[] | undefined}
-            help="The only thing a connection to a literal address, or to an encrypted name, can match."
-          />
-        </>
-      ) : null}
-
 
       {/*
         * Folded rather than absent: a resolver reachable only through the tunnel is an ordinary need

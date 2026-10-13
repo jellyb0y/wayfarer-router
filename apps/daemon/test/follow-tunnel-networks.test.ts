@@ -59,7 +59,6 @@ function benchProfile(): ProfileDocument {
   const openvpn = (id: string, suffix: string) => ({
     id,
     name: id,
-    role: 'resource',
     onUnavailable: 'block',
     enabled: true,
     protocol: 'openvpn',
@@ -74,7 +73,6 @@ function benchProfile(): ProfileDocument {
       {
         id: 'corp',
         name: 'corp',
-        role: 'resource',
         onUnavailable: 'block',
         enabled: true,
         protocol: 'cloak-openvpn',
@@ -104,7 +102,6 @@ function benchProfile(): ProfileDocument {
       {
         id: 'relay',
         name: 'relay',
-        role: 'resource',
         onUnavailable: 'block',
         enabled: true,
         protocol: 'vless',

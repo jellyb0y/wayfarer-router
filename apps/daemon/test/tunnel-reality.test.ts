@@ -23,7 +23,6 @@ function findingsFor(config: Record<string, unknown>, options: { enabled?: boole
     {
       id: 'alt-a',
       name: 'Warsaw',
-      role: 'alternative',
       onUnavailable: 'block',
       enabled: options.enabled ?? true,
       protocol: 'vless',

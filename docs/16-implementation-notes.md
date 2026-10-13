@@ -6397,3 +6397,50 @@ change held by the ordering bug, which would have postponed the retry by a day.
 the way to force one. The feed's own `Profile-Update-Interval` header (the `claude` feed sends `12`) is
 not read: `refreshHours` is the owner's.
 
+
+## A subscription is a group, and the egress is one id (2026-10-14, schema 9)
+
+**Supersedes** the "withdrawn node is replaced" paragraph of the previous entry, written the same day: that
+re-pointing rule, the disabled new nodes and the failover list are gone.
+
+**The question.** The owner, after the re-pointing rule had moved `france` onto a second German node and a
+third node had arrived disabled: everything one subscription offers should be one upstream; its sessions
+stick to one member and move automatically when that one dies; there is no fixed list; and anything set to
+go through the main tunnel (Collectibles, `via: failover`) rides whichever member is selected.
+
+**What was found, reading the code (read-only exploration before any change).**
+
+* Failover was one selector, `wf-selector`, switched by this project's watchdog through the core's API
+  (`PUT /proxies/wf-selector`), never by the core itself. The core's own `urltest` group is in the 1.14.0
+  schema and was used nowhere.
+* `decideSelection` already chose "the healthy candidate with the best score" for candidates outside the
+  priority list; with an empty list that is exactly the rule wanted, sticky and `failStreak` included.
+* `wf-selector` is also what `via: failover`, the tunnel resolver, `route.final` and fall-through name. If the
+  egress is reached **through** it, none of those has to change.
+* Loopback ports follow tunnel order (`core/emit.ts`), so members must be planned after a person's tunnels.
+
+**Decided.** Groups at `/groups`, members written by the refresh only, one selector per group tagged with the
+group's id, `policy.egress` as one id, the watchdog choosing per group. Details and rules in
+`docs/04-tunnels-and-protocols.md`, "Groups"; data model in `docs/03-data-model.md`.
+
+**Found by a dry run against the board's stored profile, before deploying** (migration, validation,
+invariants and the generated selectors, read from the database read-only):
+
+* `duplicate_tunnel_id /groups/1/members/1/id` — the subscription `claude` had derived a tunnel named
+  `claude`, so the group and its member would have shared one outbound tag. The migration now renames such a
+  member to the first free `<group>-<n>` (here `claude-2`); the group keeps its id because the egress, rules
+  and `via` may name it.
+* The `claude` group's selector would start on `claude-1`, the REALITY node that has never connected
+  (2026-10-12: the parser drops two of its fields). With stickiness that would hold Claude on a dead member
+  for `failStreak` rounds after every core restart. A member not yet seen healthy by the running process is
+  now not protected by stickiness.
+
+**Why the alternatives lost.**
+
+* *The core's `urltest` group.* It switches on measured latency with a tolerance, by itself; it has no
+  `failStreak`, no jitter or loss thresholds, records nothing in the event ring, and would make the device's
+  choice invisible to the watchdog that reports it. The existing loop already did the right thing.
+* *Keep per-node tunnels and generate the list from the feed.* Still two descriptions of one thing, and a
+  person could still edit one of them.
+* *A group-of-groups egress list.* The owner asked for no fixed list; one egress, and a group inside it, is
+  the whole of what was asked.
