@@ -145,13 +145,21 @@ export function generateHostapd(input: HostapdInput): string {
     }
   }
 
+  // 802.11ax needs both: the driver reporting HE for AP mode specifically (capabilities are
+  // published per interface type, and a radio can do HE as a client and not as an access point),
+  // and the profile asking for it. The report alone is not enough — see `AccessPointRadio.wifi6`.
   const he = bandReport?.heIftypes ?? [];
   if (he.includes('AP')) {
     lines.push('');
-    lines.push('# 802.11ax, enabled because this driver reports HE support for AP mode specifically —');
-    lines.push('# HE capabilities are published per interface type, and a radio can support it as a');
-    lines.push('# client and not as an access point.');
-    lines.push('ieee80211ax=1');
+    if (accessPoint.radio.wifi6 === true) {
+      lines.push('# 802.11ax, asked for by the profile and reported by this driver for AP mode.');
+      lines.push('ieee80211ax=1');
+    } else {
+      lines.push('# 802.11ax off although this driver reports it for AP mode: a reported capability is');
+      lines.push('# not a working one, and a Wi-Fi 6 client that fails here associates and then loses');
+      lines.push('# frames silently. The profile turns it on (accessPoint.radio.wifi6).');
+      lines.push('ieee80211ax=0');
+    }
   }
 
   lines.push('');

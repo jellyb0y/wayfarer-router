@@ -225,6 +225,12 @@ export function AccessPointEditor({ document }: { document: Record<string, unkno
         checked={radio['hidden'] === true}
         help="Hiding it stops nothing and makes every device that knows it announce the name wherever it goes."
       />
+      <CheckField
+        pointer="/accessPoint/radio/wifi6"
+        label="Wi-Fi 6 (802.11ax)"
+        checked={radio['wifi6'] === true}
+        help="Off by default. Some radios report Wi-Fi 6 and then lose a Wi-Fi 6 device's traffic: it connects and gets no address. Turn it on only after checking every device you use."
+      />
 
       <Fold summary="Which radio">
         <SelectField

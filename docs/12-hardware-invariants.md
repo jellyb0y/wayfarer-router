@@ -523,6 +523,58 @@ made structural rather than remembered.
 `-p /run/wayfarer/hostapd`, or it will report a working access point as absent.
 
 
+## A reported 802.11ax is not a working one
+
+**Symptom, 2026-10-14.** A PlayStation (Sony OUI `c8:4a:a0`, associating with HE) joined the access
+point and never got an address. hostapd logged a complete association every time —
+`EAPOL-4WAY-HS-COMPLETED`, flags `[AUTHORIZED][MFP][HT][VHT][HE]`, SAE — and dnsmasq answered every
+`DHCPDISCOVER` with a `DHCPOFFER`. No `DHCPREQUEST` ever followed; after ~35 s the client
+disassociated and started over. An iPhone and a Mac on the same access point, also HE, also SAE, were
+fine.
+
+The access point radio: `mt7921u`, firmware build 20230526, 5 GHz channel 36, hostapd 2.10. Its
+driver reports HE for AP mode, and the generator then wrote `ieee80211ax=1` on that report alone.
+
+**What was measured.**
+
+* A raw-socket capture on the access point interface: the offer went out unicast to the client's MAC
+  (the client did not set the broadcast flag). `iw station get` showed `tx failed 0`, `tx retries 0`
+  — counters this driver evidently does not maintain, so they prove nothing.
+* With an address set by hand on the client, traffic flowed (DNS answered, TLS sessions to its
+  vendor's servers carried data) but the downlink lost frames **in bursts of seconds**: 40 pings at
+  250 ms, sequence 1–17 lost, then answers at ~1 ms, then another gap. 30 pings at 500 ms: 33 % loss.
+  ARP requests from the access point went unanswered for ~10 s. `tx bitrate` to the client: 6 Mbit/s,
+  while the client sent at HE-MCS 5. The iPhone at the same moment: 0 of 10 lost.
+* `ieee80211ax=0`, nothing else changed, hostapd restarted: the client reassociated without HE.
+  60 pings at 250 ms, **0 lost**, rtt 0.98 ms average; `tx bitrate` 468 Mbit/s VHT-MCS 5 80 MHz.
+  The client's own connection test then passed (reported by its owner; the client still had the
+  address set by hand).
+
+**What was not established.** Which part of HE fails. Bursts of loss with a normal rtt in between look
+like frames delivered while the client sleeps, which points at HE power save (target wake time), but
+that is an assumption: nothing here isolated it. Whether the fault is in the driver, the firmware, the
+client, or the pair is equally open.
+
+**Decision.** 802.11ax needs the profile to ask for it (`accessPoint.radio.wifi6: true`) **and** the
+driver to report HE for AP mode. Absent means off, so no profile needs a migration. When the driver
+reports it and the profile does not ask, the generated file says `ieee80211ax=0` with the reason,
+rather than omitting the line: hostapd's default is the same, but a reader of the file on the device
+should see that it is off on purpose.
+
+**Why the alternatives lost.**
+
+* *Keep the driver report as the gate.* That is what failed, and the failure is the worst kind: the
+  client associates, the access point reports it as connected and authorised, and nothing anywhere says
+  "error". It reads as a problem with the client.
+* *A list of radios known to be bad.* Hardware knowledge in the source, and it would be wrong the
+  first time a firmware update fixed it or a different client broke on a radio not on the list.
+* *Turn off only target wake time* (`he_twt_responder=0`). Possibly enough, but the cause was not
+  isolated, so it would be a guess shipped as a fix. It is the obvious next experiment for whoever
+  wants 802.11ax back.
+
+**What is given up.** Not measured here. Wi-Fi 6 mostly buys airtime efficiency with many clients;
+this access point serves a handful, and the measured downlink without it was 468 Mbit/s.
+
 ## The card's device name is not stable across boots
 
 Measured on the bench board, 2026-09-21. The same physical SD card, the same image, two boots:

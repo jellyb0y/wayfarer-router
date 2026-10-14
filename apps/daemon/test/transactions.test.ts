@@ -545,6 +545,50 @@ test('hostapd: the world domain omits country_code rather than writing a value h
   assert.match(real, /^ieee80211d=1$/m);
 });
 
+/* ── 802.11ax is the profile's choice, not the driver's ──────────────────────────────────── */
+
+test('hostapd: a driver reporting HE for AP mode does not turn 802.11ax on by itself', async () => {
+  // Measured 2026-10-14 on an mt7921u access point that reports HE for AP mode: a Wi-Fi 6 game
+  // console associated, completed the handshake, and then lost downlink frames in bursts of seconds
+  // — every DHCP offer unanswered, 33% ping loss, 6 Mbit/s. With `ieee80211ax=0` and nothing else
+  // changed: 0 of 60 pings lost, 468 Mbit/s. The driver's report was the only gate, and it was wrong.
+  const { generateHostapd } = await import('../src/core/generate/hostapd.ts');
+  const { dualBandRadio } = await import('./helpers/synthetic-inventory.ts');
+  const radio = dualBandRadio().radios[0]!;
+
+  const build = (wifi6: boolean | undefined): string =>
+    generateHostapd({
+      profile: {
+        meta: { name: 'T' },
+        accessPoint: {
+          radio: { band: '5GHz', channel: 36, width: 80, country: 'DE', ...(wifi6 === undefined ? {} : { wifi6 }) },
+          ssid: 'T',
+        },
+      } as never,
+      interfaceName: 'wlan0',
+      radio,
+      passphrase: 'a-passphrase',
+      channelFollowsUplink: false,
+    });
+
+  // Absent is off: every profile written before the field existed keeps working without a migration.
+  assert.match(build(undefined), /^ieee80211ax=0$/m);
+  assert.match(build(false), /^ieee80211ax=0$/m);
+  assert.match(build(true), /^ieee80211ax=1$/m);
+  // And asking for it on a band the driver reports no HE for writes nothing at all.
+  const twoFour = generateHostapd({
+    profile: {
+      meta: { name: 'T' },
+      accessPoint: { radio: { band: '2.4GHz', channel: 1, width: 20, country: 'DE', wifi6: true }, ssid: 'T' },
+    } as never,
+    interfaceName: 'wlan0',
+    radio,
+    passphrase: 'a-passphrase',
+    channelFollowsUplink: false,
+  });
+  assert.equal(/^ieee80211ax=/m.test(twoFour), false);
+});
+
 /* ── restoring a file is not restoring an effect ─────────────────────────────────────────── */
 
 test('takeover undo: the record carries the manager, so the second undo knows whose reload to run', () => {

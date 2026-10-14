@@ -574,10 +574,10 @@ vht_capab=[MAX-MPDU-7991][RXLDPC][SHORT-GI-80][TX-ANTENNA-PATTERN]
 vht_oper_chwidth=1
 vht_oper_centr_freq_seg0_idx=42
 
-# 802.11ax, enabled because this driver reports HE support for AP mode specifically —
-# HE capabilities are published per interface type, and a radio can support it as a
-# client and not as an access point.
-ieee80211ax=1
+# 802.11ax off although this driver reports it for AP mode: a reported capability is
+# not a working one, and a Wi-Fi 6 client that fails here associates and then loses
+# frames silently. The profile turns it on (accessPoint.radio.wifi6).
+ieee80211ax=0
 
 # WPA2 and WPA3 together with CCMP only: TKIP caps the whole network at 54 Mbit/s and is
 # broken. sae_require_mfp with the mixed mode lets a WPA3 client get management-frame

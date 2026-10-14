@@ -65,7 +65,11 @@ the export format, so there is no second serialisation that can drift.
   "accessPoint": {
     "bind": { "by": "mac", "value": "90:de:80:47:b4:b4" },
     "radio": { "band": "5GHz", "channel": 149, "width": 80,
-               "country": "DE", "hidden": false },
+               "country": "DE", "hidden": false,
+               // 802.11ax. Absent means off, even on a radio whose driver reports HE for
+               // AP mode — see docs/12-hardware-invariants.md, "A reported 802.11ax is not
+               // a working one".
+               "wifi6": false },
     "ssid": "MyRouter", "passphrase": { "$secret": "…" },
     // Required only when this radio also carries a wifi-sta uplink and the
     // driver permits it: an explicit acknowledgement that the access point

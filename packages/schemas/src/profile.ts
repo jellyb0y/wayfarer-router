@@ -303,6 +303,14 @@ export const AccessPointRadio = Type.Object(
      */
     country: Type.String({ pattern: '^[A-Z0-9]{2}$' }),
     hidden: Type.Optional(Type.Boolean({ default: false })),
+    /**
+     * 802.11ax. Off unless asked for, even when the driver reports HE support for AP mode: a driver
+     * that reports it is not a driver that does it. Measured 2026-10-14 on an mt7921u access point,
+     * a Wi-Fi 6 client associated, then lost frames in bursts of seconds — 33% ping loss, downlink
+     * at 6 Mbit/s, every DHCP offer unanswered — while other HE clients were fine. With 802.11ax
+     * off the same client: 0 of 60 pings lost, downlink 468 Mbit/s. See docs/12-hardware-invariants.md.
+     */
+    wifi6: Type.Optional(Type.Boolean({ default: false })),
   },
   { additionalProperties: false },
 );
