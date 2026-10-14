@@ -138,7 +138,7 @@ cannot silently stop; they do not cover appearance, and that limit is stated rat
 | C12 | `external-socks` provider with managed port allocation | S | |
 | C13 | Subscription parsers as a registry with fixtures; timer-driven refresh; warn when a referenced node vanishes without re-pointing policy | M | ∥ |
 | C14 | UI: countdown and confirmation, safe-mode page, radio configuration, uplink configuration with scanning | L | |
-| C15 | Installer v2, `way doctor`, update flow with bundle rollback, `way debug expose-core-api` | M | ∥ |
+| C15 | Installer v2, `way doctor`, update flow with bundle rollback, `way debug expose-core-api` — update flow done 2026-10-14: `way update`, signed bundles, `POST /api/system/update` (`docs/11`) | M | ∥ |
 | C16 | Hardware verification by hand: break the uplink; kill the daemon right after applying; cut power inside the window | M | All three must self-heal |
 
 **Done when** deliberately breaking the uplink from the interface brings the device

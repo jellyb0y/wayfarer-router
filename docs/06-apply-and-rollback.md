@@ -589,6 +589,43 @@ still armed, and the remaining time is what was reported less the time that pass
 The checks still never trigger a *confirmation* — a working uplink does not prove the configuration
 is what the operator wanted.
 
+### An early revert, back for one check only — the traffic, against a baseline (2026-10-14)
+
+The section above withdrew early revert, and its two reasons still stand for the checks it was about. On
+2026-10-14 one check was given the power again, by the owner's decision, and this records why that check is
+different and what the promise now says.
+
+**The symptom.** Measured on the bench board, 2026-10-11 21:15–21:31 MSK: after a reboot the device's own
+policy rules were gone, the VLESS clients' connections looped into the tunnel, every member was unhealthy and
+`wf-selector` stood on `block`. The window watch would have found nothing: hostapd up, the uplink with carrier
+and address, `wf-core` active. Earlier that evening a tunnel parsed without its HTTP disguise had the same
+shape — units running, every connection reset. **Locally green, no client traffic** is the failure the window
+did not see, and it is the one that costs a person their internet while they wait three minutes for a timer.
+
+**The check** (`core/data-plane.ts`): a name resolved through the resolver DHCP hands clients (the device's
+LAN address), then a request answered through `wf-selector` via the core's control interface — the path
+unmatched client traffic takes — or over the uplink for a plan with no core.
+
+**Why it may act early when the others may not.**
+
+* *"The outcome was not known."* The uplink check read every uplink as down because of a parsing bug, and
+  reverted healthy changes. This check is run **before** the change too, and it may revert only when that
+  baseline **passed**. A check broken the way the uplink check was — wrong whatever the device does — fails
+  its baseline and is reported as `advisory`, never acted on. A device whose uplink is dead before the change
+  is not made unconfigurable by its own safeguard.
+* *"A second deadline nobody reported."* The reported deadline is still the latest moment the change can be
+  undone, and still the one the timer keeps. What changed is that it is **no longer the only one**, and the
+  device says so where the countdown is read: the confirmation window names "the device sees that client
+  traffic stopped working after it — having worked before" among the things that end it early, and shows the
+  check's state as it runs. The traffic check acts only after a 60 s warm-up and three consecutive failures,
+  and never later than 140 s into the window, so a revert it asks for is reported as its own
+  (`apply.data-plane-failed`) and lands before the timer's.
+
+**What stays.** Confirmation is still only a person's act: a passing check confirms nothing, because traffic
+working is not the configuration being what the person wanted. The uplink, access-point and unit checks still
+only record findings. `test/window-deadline.test.ts` still holds for them; `test/data-plane.test.ts` holds the
+new rule — a failure after a passed baseline reverts, a failure after a failed baseline does not.
+
 ### Why the revert timer is a separate unit
 
 Stated in [02-architecture.md](02-architecture.md), repeated because it is the

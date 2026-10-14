@@ -352,3 +352,75 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
     }
   }
 }
+
+export interface ScopedProcess {
+  /** The last lines the child wrote, stdout and stderr interleaved, newest last. Bounded. */
+  tail(): string[];
+  /** Settles with the exit code (or `null` for a signal) once the child is gone. */
+  exited: Promise<number | null>;
+  /** Whether the child has exited. */
+  done(): boolean;
+  /** Stops the child and its process group, and waits for it to be gone. Safe to call more than once. */
+  stop(): Promise<void>;
+}
+
+/**
+ * A child that runs for the length of one request and is always stopped by the caller.
+ *
+ * Detached for the same reason `streamLines` is: its own process group, so `stop()` reaches anything it
+ * started. Both streams are kept, bounded, because what such a child prints when it fails is the answer
+ * the caller came for — the reason a handshake was refused is in the client's log and nowhere else.
+ */
+export function spawnScoped(command: string, args: string[], options: { maxLines?: number } = {}): ScopedProcess {
+  args.forEach((arg, index) => {
+    if (arg.trim() === '') throw new EmptyArgumentError(command, index);
+  });
+  const maxLines = options.maxLines ?? 80;
+  const lines: string[] = [];
+  const keep = (chunk: string): void => {
+    for (const line of chunk.split('\n')) {
+      if (line.trim() === '') continue;
+      lines.push(line.length > 500 ? `${line.slice(0, 499)}…` : line);
+      if (lines.length > maxLines) lines.shift();
+    }
+  };
+  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', keep);
+  child.stderr?.on('data', keep);
+  let finished = false;
+  const exited = new Promise<number | null>((resolve) => {
+    child.on('error', (error) => {
+      keep(`${command}: ${error.message}`);
+      finished = true;
+      resolve(null);
+    });
+    child.on('exit', (code) => {
+      finished = true;
+      resolve(code);
+    });
+  });
+  return {
+    tail: () => [...lines],
+    exited,
+    done: () => finished,
+    async stop() {
+      if (finished || child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        child.kill('SIGTERM');
+      }
+      const gone = await Promise.race([exited.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000).unref())]);
+      if (!gone) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          child.kill('SIGKILL');
+        }
+        await exited;
+      }
+    },
+  };
+}

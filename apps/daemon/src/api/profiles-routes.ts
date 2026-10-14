@@ -29,7 +29,7 @@ import {
   matchesPointer,
   secretMatchers,
 } from '@wayfarer/schemas';
-import type { ProfileStore } from '../state/profiles.ts';
+import type { ProfileStore, TransactionRow } from '../state/profiles.ts';
 import type { Store } from '../state/store.ts';
 import type { Plan } from '../core/planner.ts';
 import { type Plan2, type Reality } from '../core/differ.ts';
@@ -42,10 +42,12 @@ import { looksLikeSecretField, nodeName, parseForeignSchema, parseSubscription, 
 import { planDocument, type PipelineContext } from '../core/pipeline.ts';
 import {
   applyDocument,
+  applyInFlight,
   confirmTransaction,
   maybeEnterSafeMode,
   revertTransaction,
   type ApplyDeps,
+  type ApplyOutcome,
 } from '../core/apply.ts';
 import { REVERT_REASONS, SAFE_MODE_THRESHOLD } from '../core/safe-mode.ts';
 import { windowCountdown } from '../core/transactions.ts';
@@ -91,6 +93,26 @@ export interface ProfileRoutesContext {
    */
   pipeline: PipelineContext;
   applyDeps: ApplyDeps;
+}
+
+/**
+ * How long an apply route waits for the apply to end before answering `202` instead. A `hot` apply ends
+ * well inside it; anything that restarts a unit does not. [assumption: chosen, not measured]
+ */
+export const SYNC_GRACE_MS = 1_000;
+
+/**
+ * A transaction as the API shows it: no documents (each is a whole profile with its secrets wrapped, and a
+ * transaction view is not an export route), and the countdown computed from the boot-relative deadline.
+ * One function for the two read routes and the event stream, so the three cannot disagree.
+ */
+export function transactionView(transaction: TransactionRow, uptimeSeconds: number | null, at: Date): Record<string, unknown> {
+  const { documentBefore, documentAfter, ...rest } = transaction;
+  void documentBefore;
+  void documentAfter;
+  // Null unless the window is open: see `windowCountdown`.
+  const countdown = windowCountdown(rest, uptimeSeconds, at);
+  return { ...rest, secondsRemaining: countdown.secondsRemaining, deadlineAnchored: countdown.anchored };
 }
 
 const ApplyBody = Type.Object(
@@ -441,6 +463,118 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
     return { ok: true, plan: planned.plan, classified: planned.classified, profileId: activeId };
   };
 
+  /**
+   * Runs an apply and answers either with its result or with `202` while it is still running.
+   *
+   * ## Why `202`
+   *
+   * Measured on the bench board, 2026-10-11: a network apply that restarted the core took longer than the
+   * client's 120 s HTTP timeout. The request failed, the apply carried on, and the confirmation window it
+   * opened was confirmed with 33 of its 180 s left — by luck, because the client had no transaction id to
+   * confirm until it went and looked. An apply now answers as soon as its transaction exists.
+   *
+   * ## Why not always
+   *
+   * A `hot` apply finishes in well under a second, and answering it `202` would make every simple client
+   * poll for what it could have been told. So the answer waits `SYNC_GRACE_MS` for the end before choosing.
+   */
+  const startApply = async (input: {
+    profileId: string;
+    document: ProfileDocumentType;
+    classes?: ApplyClass[];
+    openedBy: string | null;
+    activeProfileBefore?: string | null;
+    wait: boolean;
+  }): Promise<{ status: number; body: unknown }> => {
+    let started: (transaction: { id: string; blastRadius: string }) => void = () => undefined;
+    const startedSignal = new Promise<{ id: string; blastRadius: string }>((resolve) => {
+      started = resolve;
+    });
+    const work = applyDocument(context.applyDeps, {
+      profileId: input.profileId,
+      document: input.document,
+      ...(input.classes ? { classes: input.classes } : {}),
+      openedBy: input.openedBy,
+      ...(input.activeProfileBefore === undefined ? {} : { activeProfileBefore: input.activeProfileBefore }),
+      onStarted: (transaction) => started(transaction),
+    }).then(async (outcome) => await answerFor(outcome, input.profileId));
+    // Nothing may reject unobserved: the request can be long gone when the apply ends.
+    work.catch((error: unknown) => context.applyDeps.log('error', { error: String(error) }, 'an apply ended with an exception'));
+
+    if (input.wait) return await work;
+    const first = await Promise.race([
+      work.then((answer) => ({ answer })),
+      startedSignal.then(async (transaction) => {
+        const grace = new Promise<null>((resolve) => setTimeout(() => resolve(null), SYNC_GRACE_MS).unref());
+        const answer = await Promise.race([work, grace]);
+        return answer === null ? { transaction } : { answer };
+      }),
+    ]);
+    if ('answer' in first) return first.answer;
+    return {
+      status: 202,
+      body: {
+        transaction: { id: first.transaction.id, state: 'applying', blastRadius: first.transaction.blastRadius },
+        follow: `/api/transactions/${first.transaction.id}`,
+      },
+    };
+  };
+
+  /** The response an apply's outcome becomes, and the safe-mode decision a failed attempt takes. */
+  const answerFor = async (outcome: ApplyOutcome, profileId: string): Promise<{ status: number; body: unknown }> => {
+    if (!outcome.ok) {
+      /*
+       * A failed apply is where safe mode is decided, because this is the level the automatic action
+       * should be visible from: the response says the apply failed *and* whether the device has now
+       * stopped trying, which is the difference between "try again" and "go and look at it".
+       *
+       * Only a refusal that got as far as creating a transaction counts towards safe mode. A plan
+       * that was never usable — a provider this build does not have, a field that cannot be
+       * satisfied — touched nothing, and counting it would drop a device into rescue over a typo in
+       * a form.
+       *
+       * `!= null` rather than `!== null`: the field is optional, so a plan refused before any
+       * transaction existed leaves it `undefined`, and comparing only against `null` treated every
+       * validation refusal as an attempt. Measured on the bench board, 2026-09-20 — three refusals
+       * that touched nothing each reported a safe-mode count.
+       */
+      const attempted = outcome.transaction != null;
+      const safeMode = attempted ? await maybeEnterSafeMode(context.applyDeps, profileId) : null;
+
+      // `refused` and `steps` go inside `error.detail` as well as at the top level. The error
+      // contract is what a client is guaranteed, and a client that reads only `error` — which is the
+      // documented shape — would otherwise lose the list of what was refused and why, which is the
+      // actionable half of this particular failure.
+      const error = outcome.error!;
+      return {
+        status: error.status,
+        body: {
+          error: { code: error.code, message: error.message, hint: error.hint, detail: error.detail },
+          ...(outcome.transaction ? { transaction: outcome.transaction } : {}),
+          ...(outcome.result ? { steps: outcome.result.steps, refused: outcome.result.refused } : {}),
+          ...(safeMode
+            ? {
+                safeMode: {
+                  entered: safeMode.entered,
+                  failures: safeMode.failures,
+                  threshold: SAFE_MODE_THRESHOLD,
+                  message: safeMode.message,
+                },
+              }
+            : {}),
+        },
+      };
+    }
+    return {
+      status: 200,
+      body: {
+        transaction: outcome.transaction,
+        steps: outcome.result?.steps ?? [],
+        refused: outcome.result?.refused ?? [],
+      },
+    };
+  };
+
   typed.get(
     '/api/plan',
     {
@@ -459,12 +593,35 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
     {
       preHandler: requireScope('apply'),
       schema: {
-        summary: 'Apply the active profile. Returns a transaction; `?dryRun=1` returns the plan only.',
+        summary: 'Apply the active profile. Answers with the result, or `202` and the transaction while it runs.',
+        description:
+          'An apply that finishes within about a second answers with its result, as before. A longer one — ' +
+          'anything that restarts the core or opens a confirmation window — answers `202` with `{ transaction: ' +
+          '{ id, state: "applying" } }` the moment the transaction exists, and goes on. Follow it with ' +
+          '`GET /api/transactions/:id` (its `outcome` holds the steps and any error once it ends) or the ' +
+          '`transaction` events on `GET /api/events`. `?wait=1` holds the request until the end, as every ' +
+          'apply did before. `?dryRun=1` returns the plan only. A second apply while one runs is refused ' +
+          'with `409 apply_in_progress`.',
         body: Type.Optional(ApplyBody),
-        querystring: Type.Object({ dryRun: Type.Optional(Type.String()) }),
+        querystring: Type.Object({ dryRun: Type.Optional(Type.String()), wait: Type.Optional(Type.String()) }),
       },
     },
     async (request, reply) => {
+      /*
+       * Refused before planning, not only inside the apply. Measured on the bench board, 2026-10-14 03:18:28
+       * MSK: a second `POST /api/apply` sent while a network apply was reconciling got no answer within the
+       * client's 120 s — it was planning (inventory, reality, the core's own check) against a device that
+       * was being reconfigured, and would only have reached the lock afterwards. A dry run is still allowed.
+       */
+      if (request.query.dryRun !== '1' && applyInFlight(profiles)) {
+        return reply.status(409).send({
+          error: {
+            code: 'apply_in_progress',
+            message: 'Another apply is under way on this device. Nothing was done.',
+            hint: 'Follow it in GET /api/transactions or the event stream, then try again.',
+          },
+        });
+      }
       const planned = await planActive();
       if (!planned.ok) return reply.status(planned.status).send(planned.body);
 
@@ -478,65 +635,16 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
       // here: the same function serves `way revert` and the start-up sweep, so an apply and the revert
       // that undoes it cannot drift apart.
       const body = (request.body ?? {}) as { classes?: ApplyClass[] };
-      const outcome = await applyDocument(context.applyDeps, {
+      const answer = await startApply({
         profileId: planned.profileId,
         document: profiles.get(planned.profileId)!.document as ProfileDocumentType,
         ...(body.classes ? { classes: body.classes } : {}),
         // Whose apply this is. Recorded on the transaction so this credential cannot expire while the
         // window it opened is counting down: nobody else can confirm it.
         openedBy: request.auth?.id ?? null,
+        wait: request.query.wait === '1',
       });
-
-      if (!outcome.ok) {
-        /*
-         * A failed apply is where safe mode is decided, because this is the level the automatic action
-         * should be visible from: the response says the apply failed *and* whether the device has now
-         * stopped trying, which is the difference between "try again" and "go and look at it".
-         *
-         * Only for a refusal that actually attempted something. A validation refusal touched nothing, so
-         * counting it towards safe mode would drop a device into rescue for a typo in a form.
-         */
-        /*
-         * Only a refusal that got as far as creating a transaction counts towards safe mode. A plan
-         * that was never usable — a provider this build does not have, a field that cannot be
-         * satisfied — touched nothing, and counting it would drop a device into rescue over a typo in
-         * a form.
-         *
-         * `!= null` rather than `!== null`: the field is optional, so a plan refused before any
-         * transaction existed leaves it `undefined`, and comparing only against `null` treated every
-         * validation refusal as an attempt. Measured on the bench board, 2026-09-20 — three refusals
-         * that touched nothing each reported a safe-mode count.
-         */
-        const attempted = outcome.transaction != null;
-        const safeMode = attempted ? await maybeEnterSafeMode(context.applyDeps, planned.profileId) : null;
-
-        // `refused` and `steps` go inside `error.detail` as well as at the top level. The error
-        // contract is what a client is guaranteed, and a client that reads only `error` — which is the
-        // documented shape — would otherwise lose the list of what was refused and why, which is the
-        // actionable half of this particular failure.
-        const error = outcome.error!;
-        return reply.status(error.status).send({
-          error: { code: error.code, message: error.message, hint: error.hint, detail: error.detail },
-          ...(outcome.transaction ? { transaction: outcome.transaction } : {}),
-          ...(outcome.result ? { steps: outcome.result.steps, refused: outcome.result.refused } : {}),
-          ...(safeMode
-            ? {
-                safeMode: {
-                  entered: safeMode.entered,
-                  failures: safeMode.failures,
-                  threshold: SAFE_MODE_THRESHOLD,
-                  message: safeMode.message,
-                },
-              }
-            : {}),
-        });
-      }
-
-      return {
-        transaction: outcome.transaction,
-        steps: outcome.result?.steps ?? [],
-        refused: outcome.result?.refused ?? [],
-      };
+      return reply.status(answer.status).send(answer.body);
     },
   );
 
@@ -619,11 +727,6 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
     async (request, reply) => {
       const transaction = profiles.transaction(request.params.id);
       if (transaction === null) return notFound(reply, 'transaction');
-      // Neither document is returned: each is a whole profile with its secrets wrapped, and a
-      // transaction view is not an export route.
-      const { documentBefore, documentAfter, ...rest } = transaction;
-      void documentBefore;
-      void documentAfter;
       /*
        * The countdown, so a client that reconnects mid-window picks it up rather than discovering at
        * second 179 that a deadline existed — and computed from the **boot-relative** deadline the armed
@@ -633,9 +736,7 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
        * deciding whether their access is coming back.
        */
       const uptime = await context.platform.host.uptimeSeconds().catch(() => null);
-      // Null unless the window is open: see `windowCountdown`.
-      const countdown = windowCountdown(transaction, uptime, new Date());
-      return { ...rest, secondsRemaining: countdown.secondsRemaining, deadlineAnchored: countdown.anchored };
+      return transactionView(transaction, uptime, new Date());
     },
   );
 
@@ -648,12 +749,7 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
       const uptime = await context.platform.host.uptimeSeconds().catch(() => null);
       const at = new Date();
       return {
-        transactions: profiles.recentTransactions().map(({ documentBefore, documentAfter, ...rest }) => {
-          void documentBefore;
-          void documentAfter;
-          const countdown = windowCountdown(rest, uptime, at);
-          return { ...rest, secondsRemaining: countdown.secondsRemaining, deadlineAnchored: countdown.anchored };
-        }),
+        transactions: profiles.recentTransactions().map((row) => transactionView(row, uptime, at)),
       };
     },
   );
@@ -665,8 +761,15 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
     {
       preHandler: requireScope('apply'),
       schema: {
-        summary: 'Make a profile active. Returns a transaction, because it can change the network.',
+        summary: 'Make a profile active; with `?apply=1`, also apply it as one transaction.',
+        description:
+          'Without `apply`, only the selection changes and the answer names the next step (`POST /api/apply`); ' +
+          'nothing on the device changes until then. With `?apply=1` the selection and the apply are one ' +
+          'transaction, answered exactly as `POST /api/apply` answers (the result, or `202` while it runs). If ' +
+          'the plan is refused before anything changes, the previous selection is put back at once; if the ' +
+          'transaction is reverted — by a person, the deadline or the traffic check — so is the selection.',
         params: Type.Object({ id: Type.String() }),
+        querystring: Type.Object({ apply: Type.Optional(Type.String()), wait: Type.Optional(Type.String()) }),
       },
     },
     async (request, reply) => {
@@ -689,16 +792,93 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
         });
       }
 
+      const andApply = request.query.apply === '1';
+      if (andApply && applyInFlight(profiles)) {
+        // Checked before the selection moves: changing it under a running apply would make that apply's
+        // revert target and the selection disagree.
+        return reply.status(409).send({
+          error: { code: 'apply_in_progress', message: 'Another apply is under way on this device. Nothing was done.', hint: 'Try again once it has ended.' },
+        });
+      }
+
+      const before = store.device().activeProfileId;
       store.recordEvent({
         level: 'info',
         kind: 'profile.activated',
-        summary: `profile "${profile.name}" activated`,
+        summary: `profile "${profile.name}" activated${andApply ? ' and applied' : ''}`,
       });
       context.store.setActiveProfileId(request.params.id);
+
+      if (andApply) {
+        const answer = await startApply({
+          profileId: request.params.id,
+          document: profile.document as ProfileDocumentType,
+          openedBy: request.auth?.id ?? null,
+          activeProfileBefore: before,
+          wait: request.query.wait === '1',
+        });
+        /*
+         * Refused before any transaction existed (a plan that does not hold, a window already open): the
+         * device was never touched, so the selection goes back at once rather than naming a profile the
+         * device is not running.
+         */
+        const body = answer.body as { transaction?: unknown };
+        if (answer.status >= 400 && body.transaction === undefined) {
+          context.store.setActiveProfileId(before);
+          store.recordEvent({
+            level: 'info',
+            kind: 'profile.activation-reverted',
+            summary: `profile "${profile.name}" was not applied, so the previous selection is active again`,
+          });
+        }
+        return reply.status(answer.status).send(answer.body);
+      }
 
       // Activation returns a transaction because it can change the network, exactly like an apply. In
       // this slice the plan that follows is what decides whether it can be carried out.
       return { activeProfileId: request.params.id, nextStep: 'POST /api/apply' };
+    },
+  );
+
+  /**
+   * A copy of a stored profile, made inside the store.
+   *
+   * The interface deliberately offered no "duplicate" button (`docs/08-ui.md`): a copy made in the browser
+   * carries every credential through the page — the export with secrets, edited, then imported. Here the
+   * document is copied as stored, its secrets still wrapped, and none of them reaches the response.
+   * Measured as the need on 2026-10-11: creating the CryptoCAT profile beside an existing one meant
+   * typing every secret again, with no way to start from the profile that already worked.
+   */
+  typed.post(
+    '/api/profiles/:id/clone',
+    {
+      preHandler: requireScope('apply'),
+      schema: {
+        summary: 'Copy a stored profile, secrets included, without any secret leaving the device.',
+        description:
+          'The copy is a new, inactive profile with the given name and the same document; every secret is ' +
+          'copied as stored and none is returned. Group observations (`lastRefresh`) are copied too, because ' +
+          'they are this device\'s and stay true of the copy.',
+        params: Type.Object({ id: Type.String() }),
+        body: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64 }) }, { additionalProperties: false }),
+      },
+    },
+    async (request, reply) => {
+      const source = profiles.get(request.params.id);
+      if (source === null) return notFound(reply, 'profile');
+      const document = structuredClone(source.document) as Record<string, unknown>;
+      const meta = (document['meta'] ?? {}) as Record<string, unknown>;
+      const at = new Date().toISOString();
+      document['meta'] = { ...meta, name: request.body.name, createdAt: at, updatedAt: at };
+      const copy = profiles.create(document);
+      const who = request.auth?.kind === 'token' ? `token ${request.auth.id}` : 'a signed-in session';
+      store.recordEvent({
+        level: 'info',
+        kind: 'profile.cloned',
+        summary: `profile "${source.name}" copied as "${copy.name}" by ${who}`,
+        detail: { from: source.id, to: copy.id },
+      });
+      return reply.status(201).send({ id: copy.id, name: copy.name, clonedFrom: source.id });
     },
   );
 
@@ -737,7 +917,8 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
           'Needs `apply` rather than `read`, because the body is a credential-bearing blob and this is the ' +
           'route that turns it into tunnel configurations. Nothing is stored: the result is a set of drafts, ' +
           'each a `{ protocol, config }` pair the profile schema accepts. A link naming a protocol this ' +
-          'product does not run is reported by name, with its line, never silently skipped.',
+          'product does not run is reported by name, with its line, never silently skipped. Each node lists ' +
+          '`ignoredParams`: query parameters its link carried that nothing in the parser read.',
         body: Type.Object({ text: Type.String({ maxLength: 1_000_000 }) }, { additionalProperties: false }),
       },
     },
@@ -771,6 +952,9 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
           name: nodeName(node),
           scheme: node.scheme,
           config: node.config,
+          // What the link carried and nothing read. Empty is the ordinary case; anything here is a
+          // parameter the server may depend on and this product will not send.
+          ignoredParams: node.ignoredParams ?? [],
         })),
         // Reported, never dropped — and each refusal names the scheme it rejected *and* what this product
         // runs, because a refusal that names only the first is a riddle. A node that vanishes without a

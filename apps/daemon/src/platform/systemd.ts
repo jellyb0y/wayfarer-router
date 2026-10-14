@@ -85,6 +85,16 @@ export interface SystemdController {
    */
   runTransient(options: TransientUnitOptions): Promise<TransientResult>;
   /**
+   * Starts `argv` now as a transient unit of its own and returns without waiting for it: a process that
+   * must outlive this one — the updater, which stops this daemon. Collected when it ends.
+   */
+  runOnce(options: { unit: string; description: string; argv: string[] }): Promise<{ ok: boolean; message: string }>;
+  /**
+   * Clears a unit's failed state and its start-limit counter, so the next start is not refused with
+   * "Start request repeated too quickly". See `core/update.ts` for where that bit.
+   */
+  resetFailed(unit: string): Promise<void>;
+  /**
    * Stops a transient unit and its timer, and clears a failed state so the same name can be used
    * again.
    *
@@ -576,6 +586,25 @@ export function createSystemdController(options: SystemdOptions = {}): SystemdCo
         message: (result.stderr + result.stdout).trim(),
         ...(result.code === 0 ? { firesAtUptimeSeconds } : {}),
       };
+    },
+
+    async runOnce(once) {
+      requireUnitName(once.unit);
+      if (once.argv.length === 0) throw new Error('a transient unit needs a command to run');
+      await run(systemctlPath, ['reset-failed', once.unit], { timeoutMs: 10_000 }).catch(() => undefined);
+      const result = await run(
+        systemdRunPath,
+        // `--no-block`: the caller is answering an HTTP request and must not wait for an install that
+        // stops it. `--collect`, so a finished run leaves no unit behind to refuse the next one's name.
+        [`--unit=${once.unit}`, `--description=${once.description}`, '--collect', '--no-block', ...once.argv],
+        { timeoutMs: 20_000 },
+      );
+      return { ok: result.code === 0, message: (result.stderr + result.stdout).trim() };
+    },
+
+    async resetFailed(unit) {
+      requireUnitName(unit);
+      await run(systemctlPath, ['reset-failed', unit], { timeoutMs: 10_000 }).catch(() => undefined);
     },
 
     restartDetached(unit) {

@@ -36,6 +36,7 @@ import {
   outsideCatalogue,
   type CarrierChoice,
   type CoreCapabilities,
+  type CarrierLogLevel,
   type EntryPlanContext,
   type InstalledBinaries,
 } from './catalogue/index.ts';
@@ -53,6 +54,8 @@ export interface EmitInput {
   installed: InstalledBinaries;
   /** Ports already taken, so an entry cannot be handed one that is spoken for. */
   allocatedPorts: Set<number>;
+  /** See `EntryPlanContext.carrierLogLevel`. */
+  carrierLogLevel?: CarrierLogLevel;
 }
 
 /** A local port this device will listen on, and what claimed it. */
@@ -160,6 +163,7 @@ export function emitTunnels(raw: EmitInput): EmitResult {
       core: input.core,
       installed: input.installed,
       allocatePort,
+      ...(input.carrierLogLevel === undefined ? {} : { carrierLogLevel: input.carrierLogLevel }),
     };
 
     const planned = entry.plan(tunnel.config, context);

@@ -59,6 +59,14 @@ export interface DaemonConfig {
   timeServers: string[];
   /** The operator CLI, for the command line of the transient revert unit. */
   wayBinary: string;
+  /** Where the installed bundle lives: `daemon.cjs`, `way.cjs`, `ui/`, `bin/`. What an update replaces. */
+  installDir: string;
+  /**
+   * The public half of the key update bundles are signed with (PEM, Ed25519). Absent on the device means
+   * no update is accepted through the API: an unsigned bundle is arbitrary code, and nothing else here
+   * can tell a bundle its owner built from one somebody else did.
+   */
+  updateKeyPath: string;
   /** Tool paths, for a distribution that puts them elsewhere. */
   paths: Record<string, string>;
 }
@@ -88,6 +96,8 @@ export const DEFAULT_CONFIG: DaemonConfig = {
   // learn the time — which on this hardware means unable to bring up a tunnel.
   timeServers: ['162.159.200.1', '162.159.200.123', '216.239.35.0', '216.239.35.4'],
   wayBinary: '/usr/local/bin/way',
+  installDir: '/opt/wayfarer',
+  updateKeyPath: '/etc/wayfarer/update-signing.pub',
   paths: {},
 };
 
@@ -185,6 +195,8 @@ export function mergeConfig(parsed: unknown, warnings: string[]): DaemonConfig {
     // is that no resolver is available when they are needed.
     timeServers: validTimeServers(asStringArray(parsed['timeServers']), warnings),
     wayBinary: asString(parsed['wayBinary']) ?? DEFAULT_CONFIG.wayBinary,
+    installDir: asString(parsed['installDir']) ?? DEFAULT_CONFIG.installDir,
+    updateKeyPath: asString(parsed['updateKeyPath']) ?? DEFAULT_CONFIG.updateKeyPath,
     paths: isRecord(parsed['paths'])
       ? Object.fromEntries(
           Object.entries(parsed['paths']).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),

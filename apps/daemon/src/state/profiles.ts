@@ -201,6 +201,31 @@ export interface TransactionRow {
   /** The transient unit that was armed for this transaction, as armed rather than as re-derived. */
   revertUnit: string | null;
   takeover: TakeoverRecord[];
+  /** What the apply ended with — its steps, refusals and error — once it has. `null` while it runs. */
+  outcome: TransactionOutcome | null;
+  /** The window's traffic check, for a transaction that opened a window. See `core/data-plane.ts`. */
+  dataPlane: DataPlaneReading | null;
+  /** The profile active before an activate-and-apply, put back by its revert. `null` otherwise. */
+  activeProfileBefore: string | null;
+}
+
+export interface TransactionOutcome {
+  ok: boolean;
+  steps?: unknown;
+  refused?: unknown;
+  error?: { code: string; message: string; hint: string; status: number; detail?: unknown };
+}
+
+/**
+ * The traffic check's state. `advisory` is a failure that may not revert: the check failed **before** the
+ * change too, so going back would not bring the traffic back — and reverting a change for a fault it did
+ * not cause is how a device on a dead uplink becomes impossible to configure.
+ */
+export interface DataPlaneReading {
+  state: 'pending' | 'passed' | 'failed' | 'advisory' | 'skipped';
+  detail: string;
+  at: string;
+  latencyMs?: number;
 }
 
 export interface ProfileStore {
@@ -259,6 +284,7 @@ export interface ProfileStore {
      * confirmation; see `core/credential-expiry.ts`.
      */
     openedBy?: string | null;
+    activeProfileBefore?: string | null;
   }): TransactionRow;
   transaction(id: string): TransactionRow | null;
   /**
@@ -296,6 +322,15 @@ export interface ProfileStore {
    * check read. `revertTransaction` folds it into the reason the revert records.
    */
   noteWindowFinding(id: string, finding: string | null): void;
+  /** Stores what an apply ended with. Written once the apply returns, whatever it returned. */
+  recordOutcome(id: string, outcome: TransactionOutcome): void;
+  recordDataPlane(id: string, reading: DataPlaneReading): void;
+  /**
+   * Called with the row after every write to a transaction in **this** process, so the event stream can
+   * carry it. A write by another process (`way revert`) is not seen here; a client that must not miss
+   * one reads `GET /api/transactions/:id`, which the stream is a shortcut to, not a replacement for.
+   */
+  onTransactionChanged(listener: (row: TransactionRow) => void): () => void;
   recordTakeover(id: string, entries: TakeoverRecord[]): void;
   recentTransactions(limit?: number): TransactionRow[];
   /**
@@ -428,6 +463,21 @@ export function createProfileStore(
       createdAt: String(row['created_at']),
       updatedAt: String(row['updated_at']),
     };
+  };
+
+  const transactionListeners = new Set<(row: TransactionRow) => void>();
+  /** Tells every listener what a transaction row now says. A listener that throws never fails the write. */
+  const changed = (id: string): void => {
+    if (transactionListeners.size === 0) return;
+    const row = store.transaction(id);
+    if (row === null) return;
+    for (const listener of transactionListeners) {
+      try {
+        listener(row);
+      } catch {
+        // The write has happened; a broken listener is the listener's problem, not the transaction's.
+      }
+    }
   };
 
   const store: ProfileStore = {
@@ -583,9 +633,9 @@ export function createProfileStore(
         // be stale by the time it is written.
         `INSERT INTO transactions
            (id, profile_id, document_before, document_after, kind, blast_radius, state, plan, created_at,
-            profile_revision, opened_by)
+            profile_revision, opened_by, active_profile_before)
          VALUES (?, ?, ?, ?, ?, ?, 'staged', ?, ?,
-                 (SELECT revision FROM profiles WHERE id = ?), ?)`,
+                 (SELECT revision FROM profiles WHERE id = ?), ?, ?)`,
       ).run(
         id,
         input.profileId,
@@ -599,9 +649,10 @@ export function createProfileStore(
         at,
         input.profileId,
         input.openedBy ?? null,
+        input.activeProfileBefore ?? null,
       );
       pruneTransactions();
-      return {
+      const created: TransactionRow = {
         id,
         profileId: input.profileId,
         documentBefore: input.documentBefore,
@@ -619,7 +670,12 @@ export function createProfileStore(
         reason: null,
         revertUnit: null,
         takeover: [],
+        outcome: null,
+        dataPlane: null,
+        activeProfileBefore: input.activeProfileBefore ?? null,
       };
+      changed(id);
+      return created;
     },
 
     transaction(id) {
@@ -634,6 +690,7 @@ export function createProfileStore(
       // write `committed` over a row that was already `reverted`.
       assertTransition(current.state, state);
       db.prepare('UPDATE transactions SET state = ?, reason = COALESCE(?, reason) WHERE id = ?').run(state, reason, id);
+      changed(id);
     },
 
     beginConfirmationWindow(id, deadlineAt, revertUnit, firesAtUptimeSeconds) {
@@ -645,6 +702,7 @@ export function createProfileStore(
             SET state = 'awaiting-confirm', deadline_at = ?, revert_unit = ?, fires_at_uptime_seconds = ?
           WHERE id = ?`,
       ).run(deadlineAt, revertUnit, firesAtUptimeSeconds, id);
+      changed(id);
     },
 
     confirmTransaction(id, at) {
@@ -652,10 +710,27 @@ export function createProfileStore(
       if (current === null) throw new Error(`no transaction ${id}`);
       assertTransition(current.state, 'committed');
       db.prepare("UPDATE transactions SET state = 'committed', confirmed_at = ? WHERE id = ?").run(at ?? now(), id);
+      changed(id);
     },
 
     noteWindowFinding(id, finding) {
       db.prepare("UPDATE transactions SET reason = ? WHERE id = ? AND state = 'awaiting-confirm'").run(finding, id);
+      changed(id);
+    },
+
+    recordOutcome(id, outcome) {
+      db.prepare('UPDATE transactions SET outcome = ? WHERE id = ?').run(JSON.stringify(outcome), id);
+      changed(id);
+    },
+
+    recordDataPlane(id, reading) {
+      db.prepare('UPDATE transactions SET data_plane = ? WHERE id = ?').run(JSON.stringify(reading), id);
+      changed(id);
+    },
+
+    onTransactionChanged(listener) {
+      transactionListeners.add(listener);
+      return () => transactionListeners.delete(listener);
     },
 
     finishRevert(id, at) {
@@ -663,6 +738,7 @@ export function createProfileStore(
       if (current === null) throw new Error(`no transaction ${id}`);
       assertTransition(current.state, 'reverted');
       db.prepare("UPDATE transactions SET state = 'reverted', reverted_at = ? WHERE id = ?").run(at ?? now(), id);
+      changed(id);
     },
 
     recordTakeover(id, entries) {
@@ -783,7 +859,20 @@ function toTransaction(row: Record<string, unknown>): TransactionRow {
     confirmedAt: row['confirmed_at'] === null ? null : String(row['confirmed_at']),
     revertedAt: row['reverted_at'] === null ? null : String(row['reverted_at']),
     reason: row['reason'] === null ? null : String(row['reason']),
+    outcome: parseJsonColumn(row['outcome']) as TransactionOutcome | null,
+    dataPlane: parseJsonColumn(row['data_plane']) as DataPlaneReading | null,
+    activeProfileBefore: row['active_profile_before'] == null ? null : String(row['active_profile_before']),
   };
+}
+
+/** A JSON column read defensively: bookkeeping that cannot be parsed reads as absent, never as a throw. */
+function parseJsonColumn(value: unknown): unknown {
+  if (value == null) return null;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
 }
 
 /**

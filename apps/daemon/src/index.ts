@@ -23,6 +23,7 @@ import { openDatabase } from './state/db.ts';
 import { createStore } from './state/store.ts';
 import { createTelemetry } from './telemetry/index.ts';
 import { buildServer, type ServerContext } from './api/server.ts';
+import { transactionView } from './api/profiles-routes.ts';
 import { createListenerSet, type AddressReading } from './api/listeners.ts';
 import { createProfileStore } from './state/profiles.ts';
 import { createSecretPlan } from './state/secret-plan.ts';
@@ -34,7 +35,9 @@ import {
   buildRecoveryDocument,
   recordWindowFinding,
   sweepUnconfirmed,
+  applyInFlight,
   type ApplyDeps,
+  type ApplyOutcome,
 } from './core/apply.ts';
 import { createWindowWatch } from './core/window-watch.ts';
 import { createDriftMonitor, DRIFT_INTERVAL_MS } from './core/drift.ts';
@@ -58,13 +61,23 @@ import { observeCapturedResolvers } from './core/resolver-watch.ts';
 import { listenForTransactionsEndedElsewhere } from './core/transaction-ended.ts';
 import { readStamp } from './core/credential-expiry.ts';
 import { createCoreApi } from './platform/core-api.ts';
+import type { CarrierLogLevel } from './core/catalogue/index.ts';
 import { CORE_TAGS } from './core/generate/core-config.ts';
 import { PATHS } from './core/desired-state.ts';
 import { DEFAULT_AP_PASSPHRASE, DEFAULT_AP_SSID } from './config.ts';
 
-const VERSION = '0.1.0-epic-a';
+/**
+ * The fallback when no build stamp says otherwise: a daemon run from source. A built bundle carries its
+ * own version in `build.json` (`build.mjs`), and that is what `/api/system` reports, so an update through
+ * the API can be told apart from the bundle it replaced.
+ */
+const SOURCE_VERSION = '0.1.0-source';
+let VERSION = SOURCE_VERSION;
 
 async function main(): Promise<void> {
+  // Read first, so every line this process logs names the version it is.
+  const stamp = await readBuildStamp();
+  if (stamp?.version !== undefined) VERSION = stamp.version;
   const loaded = await loadConfig();
   const config = loaded.config;
 
@@ -135,7 +148,7 @@ async function main(): Promise<void> {
     telemetry.recordLog({ level, msg, at: new Date().toISOString() });
   };
 
-  const buildAt = await readBuildStamp();
+  const buildAt = stamp?.builtAt ?? null;
 
   let logLevelRevert: NodeJS.Timeout | undefined;
   /**
@@ -208,6 +221,15 @@ async function main(): Promise<void> {
       telemetry.watchTunnels(tunnelUnits);
     },
   });
+  /*
+   * How much the external tunnel clients log. `warning` except for a bounded period a person asked for;
+   * held here, so a restart of the daemon drops it — the next plan then writes `warning` again, and until
+   * that plan is applied the drift report names the client configuration as different, which it is.
+   */
+  let carrierLogLevel: CarrierLogLevel = 'warning';
+  let carrierLogRevert: NodeJS.Timeout | null = null;
+  let carrierLogRevertsAt: string | null = null;
+  pipeline.carrierLogLevel = () => carrierLogLevel;
 
   /**
    * The health checks that run during a confirmation window.
@@ -291,6 +313,20 @@ async function main(): Promise<void> {
     wayBinary: config.wayBinary,
     log: (level, fields, message) => logger[level](fields, message),
     windowWatch,
+    /*
+     * The window's traffic check: through the core's selector, by the core's own control interface; and
+     * from the device itself where the plan runs no core. A separate client from the watchdog's: the
+     * bind is read at call time, so a profile that moves the control interface is followed.
+     */
+    dataPlane: {
+      throughCore: async (outbound, url, timeoutMs) => await createCoreApi({ bind: coreApiBind() }).check(outbound, url, timeoutMs),
+      coreRunning: async () => await createCoreApi({ bind: coreApiBind() }).available(),
+      direct: async (url, timeoutMs) => {
+        const answer = await platform.http.fetchText(url, { timeoutMs, maxBytes: 64 * 1024 });
+        return answer.ok ? { ok: true, detail: 'answered' } : { ok: false, detail: answer.reason };
+      },
+      resolve: async (server, host, timeoutMs) => await platform.dns.resolveWith(server, host, timeoutMs),
+    },
     /**
      * The recovery document, built from what the hardware reports and from the *current* access-point
      * credentials where they are usable.
@@ -324,6 +360,17 @@ async function main(): Promise<void> {
       });
     },
   };
+
+  /*
+   * Every transaction write in this process goes out on the event stream, in the shape the read routes
+   * use, so an apply answered `202` can be followed without polling.
+   */
+  profiles.onTransactionChanged((row) => {
+    void platform.host
+      .uptimeSeconds()
+      .catch(() => null)
+      .then((uptime) => telemetry.publishTransaction(transactionView(row, uptime, new Date())));
+  });
 
   const context: ServerContext = {
     config,
@@ -359,6 +406,8 @@ async function main(): Promise<void> {
       };
     },
     observers: () => observers.report(),
+    // Bound late, like `transactionEnded` above: the refresher is built further down.
+    refreshGroup: async (groupId) => await subscriptionRefresh.refreshNow(groupId),
     platform,
     store,
     telemetry,
@@ -455,6 +504,48 @@ async function main(): Promise<void> {
       });
       return { level, revertsAt: logLevelRevertsAt() };
     },
+    async setCarrierLogLevel(level, minutes) {
+      /*
+       * Applied from the **running** document, never the stored one: applying the active profile would
+       * also apply any edit saved and not yet applied, and a log level must not be the thing that puts a
+       * half-finished change on the device. `hot` and `service` only, so no window is ever opened.
+       */
+      const relevel = async (next: CarrierLogLevel): Promise<ApplyOutcome | null> => {
+        const activeId = store.device().activeProfileId;
+        const running = profiles.lastAppliedDocument();
+        if (activeId === null || running === null) return null;
+        carrierLogLevel = next;
+        return await applyDocument(applyDeps, { profileId: activeId, document: running as ProfileDocumentType, classes: ['hot', 'service'], openedBy: null });
+      };
+      const wanted: CarrierLogLevel = level === 'info' ? 'info' : 'debug';
+      const previous = carrierLogLevel;
+      const outcome = await relevel(wanted);
+      if (outcome === null) return { error: { code: 'nothing_applied', message: 'Nothing has been applied on this device yet, so no client is running.' } };
+      if (!outcome.ok && outcome.error?.code !== 'nothing_permitted') {
+        carrierLogLevel = previous;
+        return { error: { code: outcome.error?.code ?? 'apply_failed', message: outcome.error?.message ?? 'The clients could not be reconfigured.' } };
+      }
+      if (carrierLogRevert !== null) clearTimeout(carrierLogRevert);
+      carrierLogRevertsAt = new Date(Date.now() + minutes * 60_000).toISOString();
+      carrierLogRevert = setTimeout(() => {
+        carrierLogRevert = null;
+        carrierLogRevertsAt = null;
+        void relevel('warning').then((back) => {
+          store.recordEvent({
+            level: back === null || back.ok || back.error?.code === 'nothing_permitted' ? 'info' : 'warn',
+            kind: 'debug.carrier-level',
+            summary:
+              back === null || back.ok || back.error?.code === 'nothing_permitted'
+                ? 'tunnel client log level returned to warning'
+                : `tunnel client log level could not be returned to warning: ${back.error?.message ?? 'unknown'}; the next apply does it`,
+          });
+        });
+      }, minutes * 60_000);
+      carrierLogRevert.unref();
+      store.recordEvent({ level: 'info', kind: 'debug.carrier-level', summary: `tunnel client log level raised to ${wanted} for ${minutes} min` });
+      return { level: wanted, revertsAt: carrierLogRevertsAt, ...(outcome.transaction === undefined ? {} : { transaction: outcome.transaction.id }) };
+    },
+    coreApi: () => createCoreApi({ bind: coreApiBind() }),
   };
 
   const app = await buildServer(context);
@@ -629,7 +720,7 @@ async function main(): Promise<void> {
     observers,
     platform,
     timePorts: config.timePorts,
-    applying: () => profiles.recentTransactions(5).some((row) => row.state === 'applying'),
+    applying: () => applyInFlight(profiles),
     record: (event) => store.recordEvent(event),
   });
 
@@ -1090,15 +1181,17 @@ async function main(): Promise<void> {
   });
 }
 
-async function readBuildStamp(): Promise<string | null> {
+async function readBuildStamp(): Promise<{ builtAt: string; version?: string } | null> {
   // Paths are plain strings rather than resolved from `import.meta.url`: the deployed artefact
   // is a CommonJS bundle, where `import.meta` is empty, so a build stamp looked up that way is
   // always missing on the device and always present in development — the worst way round.
   const beside = process.argv[1] === undefined ? null : `${process.argv[1].replace(/\/[^/]+$/, '')}/build.json`;
   for (const path of ['/opt/wayfarer/build.json', ...(beside === null ? [] : [beside])]) {
     try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as { builtAt?: string };
-      if (typeof parsed.builtAt === 'string') return parsed.builtAt;
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as { builtAt?: string; version?: string };
+      if (typeof parsed.builtAt === 'string') {
+        return { builtAt: parsed.builtAt, ...(typeof parsed.version === 'string' ? { version: parsed.version } : {}) };
+      }
     } catch {
       /* Next candidate. */
     }

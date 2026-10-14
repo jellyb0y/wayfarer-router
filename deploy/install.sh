@@ -18,6 +18,8 @@
 #                          interval. Required on a machine shared with other software,
 #                          and the right default for anything but a dedicated device.
 #   --prefix DIR           install root for the bundle (default /opt/wayfarer)
+#   --update-key FILE      the public key update bundles are signed with (scripts/bundle.ts keygen);
+#                          without it the device accepts no update through the API
 #   --no-runtime           do not install the runtime (use one already present)
 #   --dry-run              print what would change and exit
 
@@ -65,6 +67,7 @@ STOCK_UNITS_TO_MASK=(
 SKIP_HOST_SETTINGS=0
 INSTALL_RUNTIME=1
 DRY_RUN=0
+UPDATE_KEY=
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -78,6 +81,7 @@ while [ $# -gt 0 ]; do
     --skip-host-settings) SKIP_HOST_SETTINGS=1 ;;
     --prefix) PREFIX="$2"; shift ;;
     --no-runtime) INSTALL_RUNTIME=0 ;;
+    --update-key) UPDATE_KEY="$2"; shift ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
@@ -296,6 +300,17 @@ EOF
     fi
   else
     log "keeping existing $CONFIG_DIR/daemon.json"
+  fi
+
+  # The public half of the update signing key. Public, so 0644; the device refuses every bundle through
+  # the API until it is here, because an unsigned bundle is arbitrary code run as root.
+  if [ -n "$UPDATE_KEY" ]; then
+    [ -f "$UPDATE_KEY" ] || die "--update-key: no such file: $UPDATE_KEY"
+    grep -q 'BEGIN PUBLIC KEY' "$UPDATE_KEY" || die "--update-key: $UPDATE_KEY is not a PEM public key (never pass the private one)"
+    run_step install -m 0644 "$UPDATE_KEY" "$CONFIG_DIR/update-signing.pub"
+    log "installed the update signing key: bundles signed with it can be installed through the API"
+  elif [ ! -f "$CONFIG_DIR/update-signing.pub" ]; then
+    log "no update signing key installed: updates through the API are refused until one is (--update-key)"
   fi
 }
 

@@ -58,6 +58,7 @@ function profileWith(members: Member[], lastRefresh?: { at: string; ok: boolean;
 
 interface Bench {
   run(): Promise<void>;
+  refreshNow: ReturnType<typeof refreshSubscriptions>['refreshNow'];
   document(): ProfileDocument;
   revision(): number | null;
   events: { level: string; kind: string; summary: string }[];
@@ -127,6 +128,7 @@ function bench(input: {
     run: async () => {
       await refresher.check();
     },
+    refreshNow: async (groupId) => await refresher.refreshNow(groupId),
     document: () => profiles.get(profileId)!.document as ProfileDocument,
     revision: () => profiles.profileRevision(profileId),
     events,
@@ -304,6 +306,48 @@ test('a refresh whose apply fails puts the previous profile back', async () => {
     assert.equal(b.applied.length, 1);
     assert.equal(secretOf(b.document().groups[0]!.members[0]!.config.id), 'u-1');
     assert.ok(b.events.some((event) => event.kind === 'subscription.refresh-failed'));
+  } finally {
+    b.close();
+  }
+});
+
+test('a refresh asked for now runs on a group that is not due, and reports what each link carried unread', async () => {
+  const fresh = { at: NOW.toISOString(), ok: true, detail: '', nodeCount: 1 };
+  const odd = `vless://u-2@82.21.117.116:8080?type=tcp&security=none&spx=%2F&pqv=Z#FR`;
+  const b = bench({
+    profile: profileWith([tunnel('de', '5.39.255.51', 'u-1', 'DE')], fresh),
+    answer: { ok: true, text: feed(link('5.39.255.51', 'u-1', 'DE'), odd) },
+  });
+  try {
+    await b.run();
+    assert.deepEqual(b.fetched, [], 'the timer must not fetch a group refreshed a moment ago');
+
+    const result = await b.refreshNow('feed');
+    assert.ok('report' in result);
+    assert.equal(result.report.ok, true);
+    assert.equal(result.report.nodeCount, 2);
+    assert.equal(result.report.added.length, 1);
+    assert.deepEqual(result.report.ignoredParams, [{ node: 'FR', params: ['pqv', 'spx'] }]);
+    assert.equal(b.applied.length, 1);
+    assert.match(b.document().groups[0]!.lastRefresh!.detail, /unread link parameters/);
+
+    // The same set again is the same fact about the feed: one event, not one per refresh.
+    await b.refreshNow('feed');
+    assert.equal(b.events.filter((event) => event.kind === 'subscription.params-ignored').length, 1);
+  } finally {
+    b.close();
+  }
+});
+
+test('a refresh asked for now is refused for a group that does not exist or is turned off', async () => {
+  const profile = profileWith([]);
+  profile.groups[0]!.enabled = false;
+  const b = bench({ profile, answer: { ok: true, text: feed(link('5.39.255.51', 'u-1', 'DE')) } });
+  try {
+    await b.run();
+    assert.deepEqual(await b.refreshNow('nope'), { refused: 'not_found' });
+    assert.deepEqual(await b.refreshNow('feed'), { refused: 'group_disabled' });
+    assert.deepEqual(b.fetched, []);
   } finally {
     b.close();
   }

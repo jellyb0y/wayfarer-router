@@ -119,7 +119,12 @@ own API**, which went with the generic path in E4.
 GET    /api/health                    liveness; no credential at all
 GET    /api/system                    versions, uptime, clock, core detection, management channels
 POST   /api/system/poweroff           switch the device off; body exactly {"confirm":"poweroff"}
+POST   /api/system/update             install a signed bundle (octet-stream) → 202; the previous one comes back if it fails
+POST   /api/system/update/rollback    go back to the bundle the last update kept → 202
 POST   /api/tunnels/:id/restart       restart one running tunnel's own units; no body
+POST   /api/tunnels/test              try a configuration through a throwaway client; nothing saved or applied
+POST   /api/groups/:id/refresh        refresh one group of the active profile from its feed now
+GET    /api/diagnostics/routing       policy rules vs expected, route to each tunnel server, selectors
 GET    /api/inventory                 discovered hardware, capabilities, binding candidates
 GET    /api/status                    assembled live state
 
@@ -128,12 +133,13 @@ POST   /api/profiles                  create
 GET    /api/profiles/:id              full document (secrets redacted)
 PUT    /api/profiles/:id              replace document; {"$keep": true} keeps a stored secret
 DELETE /api/profiles/:id              the one path that does not read the document
-POST   /api/profiles/:id/activate     switch active profile      → transaction
+POST   /api/profiles/:id/activate     select a profile; ?apply=1 also applies it, as one transaction
+POST   /api/profiles/:id/clone        copy a stored profile inside the device, secrets included
 GET    /api/profiles/:id/export       ?secrets=include for the full form
 POST   /api/profiles/import           validate, migrate, store; reports gaps and refusals
 
-POST   /api/apply                     apply the active profile   → transaction
-                                      ?dryRun=1 returns the plan only
+POST   /api/apply                     apply the active profile: the result, or 202 + transaction while it runs
+                                      ?dryRun=1 returns the plan only; ?wait=1 holds the request to the end
 GET    /api/plan                      plan for the active profile without applying
 
 GET    /api/transactions              recent attempts
@@ -150,7 +156,7 @@ GET    /api/events                    SSE; a query, or no Accept: text/event-str
 GET    /api/observers                 every mechanism that watches the world: last look, last act, running?
 GET    /api/logs                      journal lines from RAM: ?unit=&level=&since=&grep=&limit=
 GET    /api/eventlog                  the persistent ring from the database: ?limit=&kind=&level=&since=
-POST   /api/debug/log-level           raise the level for a bounded period
+POST   /api/debug/log-level           raise the level for a bounded period; target: "carriers" for the tunnel clients
 
 GET    /api/docs                      every endpoint, generated, rendered for a person; no credential
 GET    /api/openapi.json              the same document, for a tool; needs the read scope
@@ -294,17 +300,79 @@ mean rewriting the recovery design. Peer state is three-valued — `answered`, `
 will not accept the credential) and `unreachable` (nothing came back) — because the last two call for
 entirely different actions and a single error hides which.
 
-### Why activation and apply return transactions
+### What activation and apply return
 
-Both can change the network, so both go through the transaction machinery in
-[06-apply-and-rollback.md](06-apply-and-rollback.md). The response is the
-transaction, including `blastRadius`, `state` and, when confirmation is required,
-`deadlineAt`. A client that ignores `deadlineAt` will see its change reverted three
-minutes later, which is the correct outcome for a client that is not paying
-attention.
+**Corrected 2026-10-14.** This section said both return a transaction. Activation never did: it moved the
+selection and answered `{ activeProfileId, nextStep: "POST /api/apply" }`, and nothing on the device changed
+until the apply. A person switching profiles on 2026-10-11 needed two calls and had a moment in between where
+the selection named a profile the device was not running — and if the apply failed, it went on naming it.
 
-For `hot` and `service` classes the transaction comes back already `committed`, so a
-simple client does not need to special-case anything.
+Now:
+
+* `POST /api/profiles/:id/activate` alone is what it always was: the selection.
+* `POST /api/profiles/:id/activate?apply=1` is the selection **and** the apply as one transaction. The
+  transaction records the profile that was active before (`activeProfileBefore`), and a revert of it — by a
+  person, the deadline, or the traffic check — puts that selection back with the configuration. A plan refused
+  before anything changed puts it back at once.
+* `POST /api/apply` and `activate?apply=1` answer the same way: see the next section.
+
+For `hot` and `service` classes the transaction comes back already `committed`. A `network` change comes back
+`awaiting-confirm` with `secondsRemaining`; a client that ignores it sees its change reverted three minutes
+later, which is the correct outcome for a client that is not paying attention.
+
+### An apply answers before it ends (2026-10-14)
+
+Measured on the bench board, 2026-10-11: a network apply that restarted the core outlived the client's 120 s
+HTTP timeout. The request failed, the apply went on, and its window was confirmed with 33 of 180 s left —
+because the client had no transaction id until it went looking. So:
+
+* An apply that ends within about a second (`SYNC_GRACE_MS`) answers with its result, as before.
+* A longer one answers **`202`** with `{ transaction: { id, state: "applying", blastRadius }, follow }` as soon
+  as its transaction exists, and carries on. Its result — steps, refusals, error — lands on the row as
+  `outcome`, read with `GET /api/transactions/:id`, and every change to the row is a `transaction` event on
+  the stream.
+* `?wait=1` holds the request to the end, for a script that wants the old behaviour.
+* **One apply at a time.** A second one while one runs is `409 apply_in_progress`. Before this nothing stopped
+  two: the route blocked, so a second request merely queued in the person's own browser. The lock is in
+  memory (`applyInFlight` in `core/apply.ts`) because the row cannot be the authority: a network apply moves
+  its row to `awaiting-confirm` before the reconcile, so a reader looking for `applying` — as the tunnel
+  restart route and the rules watch did — misses exactly the dangerous one. The tunnel restart route, the rules
+  watch, the device follower and the subscription refresh all ask the same predicate now.
+
+### The traffic check inside a window (2026-10-14)
+
+A window's row carries `dataPlane: { state, detail, at, latencyMs? }` — whether a name resolves through the
+resolver clients are handed and a request is answered through `wf-selector` (or over the uplink, for a plan
+with no core). `passed` is the evidence to look for before confirming. `failed` means the device has started
+reverting: the check failed after the change and had passed before it. `advisory` is a failure that was there
+before the change too, and is left to the person. See `docs/06-apply-and-rollback.md` for the rule and why it
+changed.
+
+### Without a shell: test, refresh, diagnose, update (2026-10-14)
+
+Each of these answers a question that took ssh on 2026-10-11.
+
+* **`POST /api/tunnels/test`** — does this configuration connect. `{ protocol, config, tunnelId? }`, or
+  `{ groupId, memberId }`. A throwaway core (and, for an external carrier, the external client at `debug`) is
+  started in a private temporary directory, asked for a delay through the planned outbound, and stopped; the
+  answer is `{ ok, latencyMs, endpoint, carrier }` or `{ ok: false, failure: { stage, message }, log }`, the
+  log with the configuration's credentials removed. `{"$keep": true}`/`{"$set": …}` positions take the stored
+  value inside the device. OpenVPN and Cloak tunnels answer `stage: "unsupported"`: standing up an interface
+  beside the running ones is a change, not a test. One test at a time.
+* **`POST /api/groups/:id/refresh`** — the timer's refresh, now. Every rule of an unattended refresh holds: a
+  change wider than `service` is held and reported, never applied from here. The answer lists, per node, the
+  link parameters the parser did not read (`ignoredParams`); `POST /api/subscriptions/parse` returns the same
+  field, and a refresh records `subscription.params-ignored` when the set changes.
+* **`GET /api/diagnostics/routing`** — each policy rule this device expects and whether it is there, the
+  kernel's own list, how the device would route to every tunnel server (`throughTunnel: true` is the loop that
+  took every tunnel down), what each core selector holds, and the rules watch's last reading.
+* **`POST /api/debug/log-level` with `target: "carriers"`** — the external tunnel clients' log level for a
+  bounded period, by applying the **running** document with the new level (`hot`/`service` only, so no window
+  and no unapplied edit rides along). It lowers itself the same way.
+* **`POST /api/system/update`** — see `docs/11-deployment.md`. The body is a bundle signed with the owner's
+  key; the device verifies it, stages it, starts `way update --staged` in a unit of its own and answers `202`.
+  `GET /api/system` then reports `version` and `update: { keyInstalled, rollbackAvailable, last }`.
+* **`POST /api/profiles/:id/clone`** — a copy made inside the store, so no secret passes through a page.
 
 ## Logs: two sources, one surface
 
@@ -349,7 +417,12 @@ event: status          incremental live state
 event: unit            { unit, active, enabled, sub }
 event: station         { ap, mac, action: "connected" | "disconnected", signal }
 event: log             { level, msg, at }         (rate-limited)
+event: transaction     a transaction row as GET /api/transactions/:id shows it, after every change
 ```
+
+`transaction` (2026-10-14) is what lets an apply answered `202` be followed without polling. It carries
+writes made by **this** process; a revert run by the timer's `way revert` is another process, so a client
+that must not miss the end reads the row as well — the stream is a shortcut to it, not a replacement.
 
 Two details that make this usable. Events are coalesced — a burst of interface
 changes becomes one `status` event rather than forty. And the stream sends a

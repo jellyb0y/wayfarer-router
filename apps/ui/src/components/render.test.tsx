@@ -305,8 +305,9 @@ describe('the confirmation window', () => {
     render(<ConfirmationWindow secondsRemaining={soon()} contact="ok" onConfirm={() => {}} />);
     expect(screen.getByText(/If you do nothing, this change is undone/)).toBeTruthy();
     expect(screen.getByRole('heading', { name: /Not confirmed yet/ })).toBeTruthy();
-    // The countdown is the governing deadline, and the page says so (G13).
-    expect(screen.getByText(/Nothing undoes this change before the countdown ends/)).toBeTruthy();
+    // The countdown is the governing deadline, and the page names every exception to it (G13). Since
+    // 2026-10-14 one of them is the device's own traffic check, which may undo a change early.
+    expect(screen.getByText(/undone only if someone asks, the device restarts, or the\s+device sees that client traffic stopped working/)).toBeTruthy();
   });
 
   it('reports lost contact as expected, and repeats the instruction', () => {
@@ -1359,28 +1360,25 @@ describe('password, profiles, device', () => {
     expect(screen.getByTitle('/accessPoint/passphrase /uplinks/0/config/psk /tunnels/0/config/credentials/password /groups/0/url')).toBeTruthy();
   });
 
-  it('offers no way to copy a profile, because every way it could would move the secrets', async () => {
+  it('offers a copy made by the device, and no copy that would move the secrets through the page', async () => {
     /*
-     * Not an unfinished control. A copy assembled in the browser has to pull every credential through
-     * the page: the full export needs a separate scope and writes a warning to the journal precisely
-     * because it is a deliberate act, and a button labelled "duplicate" would turn that into an unnamed
-     * routine. The redacted export gives a copy nobody can activate. Copying belongs inside the store,
-     * where nothing travels, and that route does not exist — see `docs/08-ui.md`.
+     * There used to be no copy at all, deliberately: a copy assembled in the browser has to pull every
+     * credential through the page — the full export needs a separate scope and writes a warning to the
+     * journal precisely because it is a deliberate act. `docs/08-ui.md` said copying belonged inside the
+     * store, where nothing travels, and that the route did not exist. It exists since 2026-10-14
+     * (`POST /api/profiles/:id/clone`), so "Copy" is that route and nothing else.
      *
      * Asserted as the list of actions rather than as the absence of one word, so any control added here
-     * has to be decided on rather than typed in — and one has been since, which is the test working
-     * rather than the test being in the way. **"Edit this one" is not a copy.** It points the four
-     * editing screens at a stored profile and moves nothing: no credential is read, nothing is
-     * written, and the document it opens is the one already on the device. That it sits beside
-     * Activate is the whole point of E6b — choosing what to edit and choosing what to run are two
-     * acts, and before this they were one.
+     * has to be decided on rather than typed in. **"Edit this one" is not a copy.** It points the four
+     * editing screens at a stored profile and moves nothing. "Activate and apply" is offered only on a
+     * profile that could be activated, which is why it appears once here and not beside "Fill secrets first".
      */
     await renderWith(<Settings live={null} />);
     await screen.findByRole('button', { name: 'Fill secrets first' });
     const card = screen.getByRole('heading', { name: 'Profiles' }).closest('section')!;
     const actions = [...card.querySelectorAll('.row-item .row-actions button')].map((node) => node.textContent);
     expect(new Set(actions)).toEqual(
-      new Set(['Activate', 'Fill secrets first', 'Edit this one', 'Export', 'Export with secrets', 'Delete']),
+      new Set(['Activate', 'Activate and apply', 'Fill secrets first', 'Edit this one', 'Copy', 'Export', 'Export with secrets', 'Delete']),
     );
   });
 

@@ -20,6 +20,7 @@ import { OpenVpnEditor } from './openvpn.tsx';
 import { CloakOpenVpnEditor } from './cloak.tsx';
 import { VlessEditor } from './vless.tsx';
 import { ProxyEditor } from './proxy.tsx';
+import { TunnelTest } from './test.tsx';
 
 export { TunnelCommonFields, type Tunnel } from './common.tsx';
 
@@ -109,5 +110,13 @@ export function TunnelEditor({ index, tunnel }: { index: number; tunnel: Tunnel 
     );
   }
   const Chosen = EDITORS[protocol as TunnelProtocol];
-  return <Chosen index={index} tunnel={tunnel} />;
+  return (
+    <>
+      <Chosen index={index} tunnel={tunnel} />
+      {/* Only where a throwaway client can stand in: an OpenVPN or Cloak tunnel is an interface of its own. */}
+      {protocol === 'vless' || protocol === 'proxy' ? (
+        <TunnelTest subject={{ tunnelId: String(tunnel['id']), protocol, config: tunnel['config'] }} />
+      ) : null}
+    </>
+  );
 }

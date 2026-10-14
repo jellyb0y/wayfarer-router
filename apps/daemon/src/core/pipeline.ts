@@ -16,6 +16,7 @@
  * core's schema) and calls pure code. It performs no mutation: that is still the reconciler's alone.
  */
 
+import type { CarrierLogLevel } from './catalogue/index.ts';
 import type { ProfileDocument } from '@wayfarer/schemas';
 import { createValidatorCache, parseForeignSchema, type JsonSchemaNode } from '@wayfarer/protocols';
 import type { Platform } from '../platform/index.ts';
@@ -46,6 +47,8 @@ export interface PipelineContext {
   managementPort: number;
   timePorts: number[];
   upScriptPath: string;
+  /** How much external clients log right now; `warning` when absent. See `EntryPlanContext`. */
+  carrierLogLevel?: () => CarrierLogLevel;
   /**
    * Resolver addresses captured from peers, by tunnel id. A runtime reading, supplied by the caller so
    * the pipeline stays pure — the same treatment as the uplink networks and for the same reason.
@@ -157,6 +160,7 @@ export async function planDocument(context: PipelineContext, document: ProfileDo
     core: coreCapabilities,
     installed: new Set(inventory.binaries.filter((entry) => entry.present).map((entry) => entry.name)),
     allocatedPorts: new Set(),
+    ...(context.carrierLogLevel === undefined ? {} : { carrierLogLevel: context.carrierLogLevel() }),
   });
 
   // The running fence's record of what in it is followed: those networks are retained while merely

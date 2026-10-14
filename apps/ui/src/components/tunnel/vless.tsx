@@ -197,10 +197,16 @@ function PasteLink({ index, named }: { index: number; named: boolean }): ReactEl
     // would quietly replace the only word on the list that they chose themselves.
     if (!named && node.label !== null) draft.set(`/tunnels/${index}/name`, node.label);
     setText('');
+    // A parameter nothing read is said out loud: on 2026-10-11 a dropped `headerType=http` made a tunnel
+    // that looked complete and could never connect.
+    const ignored =
+      node.ignoredParams === undefined
+        ? ''
+        : ` This link also carries ${node.ignoredParams.join(', ')}, which this device does not use; a server that requires it will not connect.`;
     setFilled(
-      result.nodes.length > 1
+      (result.nodes.length > 1
         ? `Filled from the first of ${result.nodes.length} links. The rest were ignored — this control fills one tunnel.`
-        : 'Filled from the link. Check the fields below before saving.',
+        : 'Filled from the link. Check the fields below before saving.') + ignored,
     );
   };
 

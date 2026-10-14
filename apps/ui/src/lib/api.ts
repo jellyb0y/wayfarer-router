@@ -59,6 +59,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ ok: boolean; uptimeSeconds: number; setupComplete: boolean }>('/api/health'),
   system: () => request<SystemResponse>('/api/system'),
+  /** The bundle file as it is: the device checks its signature, so nothing here reads or changes it. */
+  uploadUpdate: (bundle: Blob) =>
+    request<{ version: string; from: string }>('/api/system/update', {
+      method: 'POST',
+      body: bundle,
+      headers: { 'content-type': 'application/octet-stream' },
+    }),
+  rollbackUpdate: () => request<{ from: string }>('/api/system/update/rollback', { method: 'POST' }),
   inventory: () => request<InventoryResponse>('/api/inventory'),
   status: () => request<StatusResponse>('/api/status'),
   /**
@@ -80,6 +88,19 @@ export const api = {
    * `restarted: false` — a unit that did not come back running — so the caller reads the flag, not
    * the status.
    */
+  routingDiagnostics: () => request<RoutingDiagnostics>('/api/diagnostics/routing'),
+  /** The tunnel clients' log level, raised for `minutes` and lowered again by the device. */
+  raiseCarrierLogLevel: (minutes: number) =>
+    request<{ level: string; revertsAt: string | null; transaction?: string }>('/api/debug/log-level', {
+      method: 'POST',
+      body: JSON.stringify({ level: 'debug', minutes, target: 'carriers' }),
+    }),
+  /** Try a configuration through a throwaway client on the device; nothing is saved or applied. */
+  testTunnel: (subject: { tunnelId: string; protocol: string; config: unknown } | { groupId: string; memberId: string }) =>
+    request<TunnelTestResult>('/api/tunnels/test', { method: 'POST', body: JSON.stringify(subject) }),
+  /** One group of the active profile, refreshed from its feed now. See `GroupRefreshResult`. */
+  refreshGroup: (id: string) =>
+    request<GroupRefreshResult>(`/api/groups/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
   restartTunnel: (id: string) =>
     request<{ tunnel: string; restarted: boolean; message: string }>(
       `/api/tunnels/${encodeURIComponent(id)}/restart`,
@@ -169,7 +190,7 @@ export function subscribeToEvents(onEvent: (event: string, data: unknown) => voi
       /* A malformed frame is dropped rather than breaking the stream. */
     }
   };
-  for (const name of ['hello', 'status', 'unit', 'station', 'log']) {
+  for (const name of ['hello', 'status', 'unit', 'station', 'log', 'transaction']) {
     source.addEventListener(name, forward(name) as EventListener);
   }
   return () => source.close();
@@ -188,6 +209,12 @@ export interface SystemResponse {
   listen: { port: number; addresses: string[]; unresolvedInterfaces: string[] };
   clock: { timezone: string | null; ntpEnabled: boolean | null; synchronized: boolean | null };
   binaries: { name: string; present: boolean; path: string | null; version: string | null; features: string[]; neededFor: string }[];
+  /** Absent from a daemon older than the update routes. */
+  update?: {
+    keyInstalled: boolean;
+    rollbackAvailable: boolean;
+    last: { phase: string; from: string | null; to: string | null; at: string; detail?: string } | null;
+  };
   warnings: string[];
 }
 
@@ -492,6 +519,78 @@ export interface ApplyResponse {
   refused: { what: string; blastRadius: string; needs: string }[];
 }
 
+/** What an apply answers when it is still running: `202` and the transaction to follow. */
+interface AcceptedApply {
+  transaction: { id: string; state: 'applying'; blastRadius: string };
+  follow: string;
+}
+
+/** A transaction as `GET /api/transactions/:id` shows it. */
+export interface TransactionView extends Omit<ApplyResponse['transaction'], never> {
+  reason: string | null;
+  /** What the apply ended with; `null` while it runs. */
+  outcome: { ok: boolean; steps?: ApplyResponse['steps']; refused?: ApplyResponse['refused']; error?: ApiError & { status: number } } | null;
+  /** The window's traffic check: whether names resolve and a request leaves through the egress. */
+  dataPlane: { state: 'pending' | 'passed' | 'failed' | 'advisory' | 'skipped'; detail: string; at: string; latencyMs?: number } | null;
+}
+
+/**
+ * Wakes `settle` when the event stream says a transaction changed, so following an apply costs one poll
+ * per change rather than one per second. The stream is a shortcut; the poll is what is relied on, because
+ * a stream that dropped mid-apply must not leave the page waiting for ever.
+ */
+const transactionWaiters = new Set<() => void>();
+export function transactionChanged(): void {
+  for (const wake of [...transactionWaiters]) wake();
+}
+
+/**
+ * Turns either answer of an apply route into the finished result.
+ *
+ * An apply that ran long answered `202` with its transaction; its result is read back from the row once
+ * `outcome` is set. The caller sees one shape whichever way the device answered — and an apply that
+ * failed after a `202` fails here exactly as one that failed at once, with the device's own error.
+ */
+async function settle(answer: ApplyResponse | AcceptedApply): Promise<ApplyResponse> {
+  if (!('follow' in answer)) return answer;
+  const id = answer.transaction.id;
+  for (;;) {
+    await new Promise<void>((resolve) => {
+      const wake = (): void => {
+        transactionWaiters.delete(wake);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(wake, 1500);
+      transactionWaiters.add(wake);
+    });
+    let row: TransactionView;
+    try {
+      row = await request<TransactionView>(`/api/transactions/${id}`);
+    } catch (error) {
+      // The device is restarting what serves this page; keep following until it answers again.
+      if (error instanceof ApiFailure && error.status !== 502 && error.status !== 503) throw error;
+      continue;
+    }
+    if (row.outcome === null) continue;
+    if (!row.outcome.ok) {
+      const failure = row.outcome.error ?? { code: 'apply_failed', message: 'The apply did not complete.', status: 500 };
+      throw new ApiFailure(failure.status, failure);
+    }
+    return {
+      transaction: {
+        id: row.id,
+        state: row.state,
+        blastRadius: row.blastRadius,
+        deadlineAt: row.deadlineAt,
+        secondsRemaining: row.secondsRemaining,
+      },
+      steps: row.outcome.steps ?? [],
+      refused: row.outcome.refused ?? [],
+    };
+  }
+}
+
 /*
  * `ProviderDescriptor`, `providers()` and `tunnelSchema()` were here, and they are **deleted rather
  * than left in place unused.**
@@ -504,6 +603,43 @@ export interface ApplyResponse {
  *
  * The routes themselves stay on the device; what they answer changed with the catalogue.
  */
+/** `GET /api/diagnostics/routing`. */
+export interface RoutingDiagnostics {
+  rules: {
+    present: unknown[] | null;
+    bypass: { priority: number; selector: string; present: boolean | null }[];
+    coreActive: boolean;
+    coreCaptureMissing: boolean | null;
+    summary: string;
+  };
+  servers: { id: string; server: string; route: { device: string | null; source: string | null } | null; throughTunnel: boolean | null; note: string | null }[];
+  selectors: { name: string; now: string | null; members: string[] | null }[] | null;
+  watch: { name: string; lastLooked?: { what: string } | null } | null;
+}
+
+/** `POST /api/tunnels/test`. `log` is the clients' last lines, with the credentials removed. */
+export interface TunnelTestResult {
+  ok: boolean;
+  latencyMs?: number;
+  endpoint?: string;
+  carrier?: { kind: 'native' | 'external'; reason: string };
+  failure?: { stage: 'plan' | 'unsupported' | 'start' | 'request'; message: string };
+  log: string[];
+}
+
+/** `POST /api/groups/:id/refresh`. `ok` means the device now runs what the feed offers. */
+export interface GroupRefreshResult {
+  group: string;
+  ok: boolean;
+  message: string;
+  nodeCount: number;
+  added: string[];
+  updated: string[];
+  removed: string[];
+  ignoredParams: { node: string; params: string[] }[];
+  transaction?: string;
+}
+
 export const profileApi = {
   list: () => request<{ profiles: ProfileSummary[]; activeProfileId: string | null }>('/api/profiles'),
   get: (id: string) =>
@@ -536,11 +672,20 @@ export const profileApi = {
 
   plan: () => request<PlanResponse>('/api/plan'),
   dryRun: () => request<PlanResponse & { dryRun: true }>('/api/apply?dryRun=1', { method: 'POST', body: '{}' }),
-  apply: (classes?: ('hot' | 'service')[]) =>
-    request<ApplyResponse>('/api/apply', {
-      method: 'POST',
-      body: JSON.stringify(classes ? { classes } : {}),
-    }),
+  apply: async (classes?: ('hot' | 'service')[]): Promise<ApplyResponse> =>
+    await settle(
+      await request<ApplyResponse | AcceptedApply>('/api/apply', {
+        method: 'POST',
+        body: JSON.stringify(classes ? { classes } : {}),
+      }),
+    ),
+  /** Select a profile and apply it as one transaction; its revert puts the previous selection back. */
+  activateAndApply: async (id: string): Promise<ApplyResponse> =>
+    await settle(await request<ApplyResponse | AcceptedApply>(`/api/profiles/${id}/activate?apply=1`, { method: 'POST' })),
+  /** A copy made inside the device: the secrets are copied there and never pass through this page. */
+  clone: (id: string, name: string) =>
+    request<{ id: string; name: string }>(`/api/profiles/${id}/clone`, { method: 'POST', body: JSON.stringify({ name }) }),
+  transaction: (id: string) => request<TransactionView>(`/api/transactions/${id}`),
 
   /**
    * Keep a change that is inside its confirmation window.

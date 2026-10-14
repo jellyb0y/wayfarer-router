@@ -33,12 +33,12 @@
  *   stored profile is again what the device runs and the next round is not blocked by its own leftover.
  */
 
-import { parseSubscription } from '@wayfarer/protocols';
+import { nodeName, parseSubscription } from '@wayfarer/protocols';
 import type { Group, ProfileDocument } from '@wayfarer/schemas';
 import type { FetchTextResult } from '../platform/http.ts';
 import type { ProfileStore } from '../state/profiles.ts';
 import type { Store } from '../state/store.ts';
-import { applyDocument, type ApplyDeps, type ApplyOutcome } from './apply.ts';
+import { applyDocument, applyInFlight, type ApplyDeps, type ApplyOutcome } from './apply.ts';
 import { secretText } from './catalogue/values.ts';
 import type { ObserverRegistry } from './observers.ts';
 import { planDocument, type PlannedDocument } from './pipeline.ts';
@@ -61,8 +61,32 @@ type RecordEvent = (event: { level: 'info' | 'warn' | 'error'; kind: string; sum
 export interface SubscriptionRefresher {
   /** Look now, outside the cadence. Returns when the round is done. */
   check(): Promise<void>;
+  /**
+   * Refresh one group of the active profile now, whatever its `refreshHours` says — a person asked. Every
+   * other rule of a round still holds: a feed that fails changes nothing, a change wider than `service` is
+   * held, unapplied edits hold it, and a failed apply puts the previous profile back.
+   */
+  refreshNow(groupId: string): Promise<RefreshNowResult>;
   stop(): void;
 }
+
+/** What one group's refresh did. `ok` means the device now runs what the feed offers. */
+export interface RefreshReport {
+  group: string;
+  ok: boolean;
+  said: string;
+  nodeCount: number;
+  added: string[];
+  updated: string[];
+  removed: string[];
+  /** Per node, the link parameters nothing read. See `ParsedNode.ignoredParams`. */
+  ignoredParams: { node: string; params: string[] }[];
+  transaction?: string;
+}
+
+export type RefreshNowResult =
+  | { report: RefreshReport }
+  | { refused: 'no_active_profile' | 'not_found' | 'group_disabled' | 'transaction_open' };
 
 /**
  * Whether a subscription is due, and why not when it is not.
@@ -109,6 +133,12 @@ function clip(text: string): string {
   return text.length <= DETAIL_MAX ? text : `${text.slice(0, DETAIL_MAX - 1)}…`;
 }
 
+/** A short mention for `lastRefresh.detail`, whose 200 characters cannot hold the full list. */
+function ignoredNote(ignored: RefreshReport['ignoredParams']): string {
+  if (ignored.length === 0) return '';
+  return ` (${String(ignored.length)} with unread link parameters)`;
+}
+
 function describeChange(outcome: RefreshOutcome): string {
   const parts: string[] = [];
   if (outcome.added.length > 0) parts.push(`added ${outcome.added.join(', ')}`);
@@ -152,10 +182,26 @@ export function refreshSubscriptions(input: {
   });
 
   const openTransaction = (): boolean =>
-    profiles.recentTransactions(10).some((row) => row.state === 'applying' || row.state === 'awaiting-confirm' || row.state === 'reverting');
+    applyInFlight(profiles) ||
+    profiles.recentTransactions(10).some((row) => row.state === 'awaiting-confirm' || row.state === 'reverting');
 
-  /** One subscription. Returns what the observer should say about it. */
-  const refreshOne = async (profileId: string, subscription: Subscription): Promise<string> => {
+  /** The ignored-parameter set last reported per group, so the event marks a change rather than every round. */
+  const reportedIgnored = new Map<string, string>();
+
+  /** One subscription. The report's `said` is what the observer should say about it. */
+  const refreshOne = async (profileId: string, subscription: Subscription): Promise<RefreshReport> => {
+    const report: RefreshReport = {
+      group: subscription.id,
+      ok: false,
+      said: '',
+      nodeCount: 0,
+      added: [],
+      updated: [],
+      removed: [],
+      ignoredParams: [],
+    };
+    const done = (ok: boolean, said: string): RefreshReport => Object.assign(report, { ok, said: `${subscription.id}: ${said}` });
+
     const fetched = await input.fetchText(secretText(subscription.url));
     const at = now().toISOString();
     const stamp = (lastRefresh: LastRefresh): void => {
@@ -170,10 +216,15 @@ export function refreshSubscriptions(input: {
         summary: `subscription "${subscription.name}" could not be fetched: ${fetched.reason}; no member was changed`,
         detail: { subscription: subscription.id, reason: fetched.reason },
       });
-      return `${subscription.id}: fetch failed (${fetched.reason})`;
+      return done(false, `fetch failed (${fetched.reason})`);
     }
 
     const parsed = parseSubscription(fetched.text);
+    report.nodeCount = parsed.nodes.length;
+    report.ignoredParams = parsed.nodes
+      .filter((node) => node.ignoredParams !== undefined)
+      .map((node) => ({ node: nodeName(node), params: node.ignoredParams! }));
+    noteIgnored(subscription, report.ignoredParams);
     const refusedLines = parsed.failures.map((failure) => `line ${String(failure.line)} ${failure.scheme}: ${failure.reason}`);
     if (parsed.nodes.length === 0) {
       const reason = `the feed offered no node this device can run (${String(parsed.failures.length)} line(s) refused)`;
@@ -184,7 +235,7 @@ export function refreshSubscriptions(input: {
         summary: `subscription "${subscription.name}": ${reason}; no member was changed`,
         detail: { subscription: subscription.id, refused: refusedLines },
       });
-      return `${subscription.id}: empty feed`;
+      return done(false, 'empty feed');
     }
 
     /*
@@ -192,19 +243,22 @@ export function refreshSubscriptions(input: {
      * fetch took seconds, and a document read before it may be one a person has since replaced.
      */
     const row = profiles.get(profileId);
-    if (row === null) return `${subscription.id}: the profile went away during the fetch`;
+    if (row === null) return done(false, 'the profile went away during the fetch');
     const document = row.document as ProfileDocument;
     const outcome = refreshGroup({ document, groupId: subscription.id, nodes: parsed.nodes });
+    report.added = outcome.added;
+    report.updated = outcome.updated;
+    report.removed = outcome.removed;
     const changed = outcome.added.length + outcome.updated.length + outcome.removed.length > 0;
-    const offered = `${String(parsed.nodes.length)} node(s) offered`;
+    const offered = `${String(parsed.nodes.length)} node(s) offered${ignoredNote(report.ignoredParams)}`;
 
     if (!changed) {
       stamp({ at, ok: true, detail: `${offered}; nothing changed`, nodeCount: parsed.nodes.length });
-      return `${subscription.id}: ${offered}, nothing changed`;
+      return done(true, `${offered}, nothing changed`);
     }
 
     const change = describeChange(outcome);
-    const refuse = (why: string, level: 'warn' | 'error', detail: Record<string, unknown> = {}): string => {
+    const refuse = (why: string, level: 'warn' | 'error', detail: Record<string, unknown> = {}): RefreshReport => {
       // `ok: false`: the device is not running what the feed says, so the next attempt is due in an hour
       // rather than a day. A hold is usually transient — an edit about to be applied, an open window.
       stamp({ at, ok: false, detail: `${offered}; not applied: ${why}`, nodeCount: parsed.nodes.length });
@@ -214,7 +268,7 @@ export function refreshSubscriptions(input: {
         summary: `subscription "${subscription.name}" has changes that were not applied (${change}): ${why}`,
         detail: { subscription: subscription.id, added: outcome.added, updated: outcome.updated, removed: outcome.removed, ...detail },
       });
-      return `${subscription.id}: changes held (${why})`;
+      return done(false, `changes held (${why})`);
     };
 
     if (withoutObservations(document) !== withoutObservations(profiles.lastAppliedDocument())) {
@@ -235,12 +289,13 @@ export function refreshSubscriptions(input: {
     }
     if (profiles.profileRevision(profileId) !== revision || openTransaction()) {
       // Not stamped: still due, so the next round recomputes against whatever is there now.
-      return `${subscription.id}: the profile changed while planning; retried next round`;
+      return done(false, 'the profile changed while planning; retried next round');
     }
 
     const before = row.document;
     profiles.replace(profileId, outcome.document);
     const applied = await apply(profileId, profiles.get(profileId)!.document as ProfileDocument);
+    if (applied.transaction !== undefined) report.transaction = applied.transaction.id;
     if (!applied.ok) {
       profiles.replace(profileId, before);
       const why = applied.error?.message ?? 'the apply failed';
@@ -251,7 +306,7 @@ export function refreshSubscriptions(input: {
         summary: `subscription "${subscription.name}": applying ${change} failed, and the previous profile was put back: ${why}`,
         detail: { subscription: subscription.id, error: applied.error },
       });
-      return `${subscription.id}: apply failed`;
+      return done(false, 'apply failed');
     }
 
     stamp({ at, ok: true, detail: `${offered}; ${change}`, nodeCount: parsed.nodes.length });
@@ -270,7 +325,26 @@ export function refreshSubscriptions(input: {
       },
     });
     observer.acted(`refreshed ${subscription.id}: ${change}`);
-    return `${subscription.id}: ${change}`;
+    return done(true, change);
+  };
+
+  /**
+   * One event when the set of parameters the feed's links carry and nothing reads **changes**, not one per
+   * round: the set is a property of the feed, and repeating it hourly would bury every other event.
+   */
+  const noteIgnored = (subscription: Subscription, ignored: RefreshReport['ignoredParams']): void => {
+    const key = JSON.stringify(ignored);
+    if ((reportedIgnored.get(subscription.id) ?? '[]') === key) return;
+    reportedIgnored.set(subscription.id, key);
+    if (ignored.length === 0) return;
+    input.record({
+      level: 'warn',
+      kind: 'subscription.params-ignored',
+      summary:
+        `subscription "${subscription.name}": ${String(ignored.length)} node(s) carry link parameters nothing here reads ` +
+        `(${[...new Set(ignored.flatMap((entry) => entry.params))].sort().join(', ')}); a server that depends on one will not connect`,
+      detail: { subscription: subscription.id, nodes: ignored },
+    });
   };
 
   const look = async (): Promise<void> => {
@@ -299,7 +373,7 @@ export function refreshSubscriptions(input: {
     const nowMs = now().getTime();
     for (const subscription of subscriptions) {
       const why = notDueReason(subscription, nowMs);
-      said.push(why === null ? await refreshOne(profileId, subscription) : `${subscription.id}: ${why}`);
+      said.push(why === null ? (await refreshOne(profileId, subscription)).said : `${subscription.id}: ${why}`);
     }
     observer.looked(said.join('; '));
 
@@ -323,6 +397,33 @@ export function refreshSubscriptions(input: {
     return running;
   };
 
+  /*
+   * A person's "refresh now" runs inside the same single-flight as the timer's round: two refreshes of one
+   * group computing against the same document would each store their own merge, and the second would
+   * overwrite the first's stamp.
+   */
+  const refreshNow = async (groupId: string): Promise<RefreshNowResult> => {
+    while (running !== null) await running;
+    const profileId = store.device().activeProfileId;
+    const row = profileId === null ? null : profiles.get(profileId);
+    if (profileId === null || row === null) return { refused: 'no_active_profile' };
+    const group = ((row.document as ProfileDocument).groups ?? []).find((candidate) => candidate.id === groupId);
+    if (group === undefined) return { refused: 'not_found' };
+    if (!group.enabled) return { refused: 'group_disabled' };
+    if (openTransaction()) return { refused: 'transaction_open' };
+    let result: RefreshNowResult = { refused: 'not_found' };
+    running = refreshOne(profileId, group)
+      .then((report) => {
+        result = { report };
+        observer.looked(`on request: ${report.said}`);
+      })
+      .finally(() => {
+        running = null;
+      });
+    await running;
+    return result;
+  };
+
   const timer = setInterval(() => void check(), checkMs);
   timer.unref();
   observer.armed();
@@ -330,6 +431,7 @@ export function refreshSubscriptions(input: {
 
   return {
     check,
+    refreshNow,
     stop(): void {
       clearInterval(timer);
     },

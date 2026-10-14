@@ -351,6 +351,18 @@ test('VLESS: "headerType": "none" is the absence of the disguise, and the core c
   assert.equal(established.carrier.kind, 'native');
 });
 
+test('VLESS: the external client logs at warning unless a person raised it, and then at what they asked', () => {
+  // Measured on the bench board, 2026-10-11: the reason a handshake failed was logged only below warning.
+  const config = { ...ORDINARY_VLESS, network: 'tcp' as const, security: 'none' as const, headerType: 'http' as const };
+  const level = (extra: { carrierLogLevel?: 'debug' | 'info' | 'warning' }): string => {
+    const { context: ctx } = context({ id: 'relay', name: 'Relay', index: 3 });
+    const plan = planned(CATALOGUE.vless.plan(config, { ...ctx, ...extra }));
+    return JSON.parse(plan.files.find((file) => file.path.endsWith('.json'))!.content).log.loglevel as string;
+  };
+  assert.equal(level({}), 'warning');
+  assert.equal(level({ carrierLogLevel: 'debug' }), 'debug');
+});
+
 /* ── availability ────────────────────────────────────────────────────────────────────────── */
 
 test('an unknown core schema offers everything rather than refusing', () => {

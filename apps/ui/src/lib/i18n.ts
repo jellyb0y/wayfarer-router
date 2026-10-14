@@ -125,6 +125,7 @@ const en = {
   'clients.noReason': 'the device did not say why',
   /* Events. */
   'nav.events': 'Events',
+  'nav.diagnostics': 'Diagnostics',
   'events.ring': 'Kept events',
   'events.ringHolds':
     'Applies, profile switches, tunnel health, safe mode, sign-ins, lockouts and switch-offs. Not a request log.',
@@ -326,6 +327,13 @@ const en = {
   'settings.kind': 'Kind',
   'settings.updated': 'Updated',
   'settings.activate': 'Activate',
+  'settings.activateApply': 'Activate and apply',
+  'settings.activateApplyBusy': 'Applying…',
+  'settings.activateApplyHelp': 'Selects it and makes the device run it now, as one change: undoing it brings back the profile that was active.',
+  'settings.activateApplied': 'Active and running on the device.',
+  'settings.clone': 'Copy',
+  'settings.cloneName': '{0} (copy)',
+  'settings.cloned': 'Copied as "{0}", secrets included. The copy is not active.',
   'settings.activateBlocked': 'Fill secrets first',
   'settings.export': 'Export',
   'settings.exportSecrets': 'Export with secrets',

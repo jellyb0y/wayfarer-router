@@ -336,6 +336,23 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE device ADD COLUMN last_drift TEXT;
     `,
   },
+  {
+    version: 11,
+    name: 'what an apply ended with, what its traffic check read, and which profile was active before it',
+    sql: `
+      -- The apply's own result — steps, refusals and the error — as JSON. An apply now answers before it
+      -- finishes (POST /api/apply returns 202 with the transaction), so the caller reads the result back
+      -- from the row; held only in the request it would be lost with the connection that asked.
+      ALTER TABLE transactions ADD COLUMN outcome TEXT;
+      -- The window's traffic check: whether names resolve and a request leaves through the egress.
+      -- On the row for the same reason the window finding is: the revert at the deadline is run by
+      -- another process, and must be able to say what was read.
+      ALTER TABLE transactions ADD COLUMN data_plane TEXT;
+      -- The profile that was active before an activate-and-apply, so its revert puts the selection back
+      -- with the configuration. NULL for an ordinary apply, which never changes the selection.
+      ALTER TABLE transactions ADD COLUMN active_profile_before TEXT;
+    `,
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

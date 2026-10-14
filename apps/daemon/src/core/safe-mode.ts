@@ -74,6 +74,10 @@ export interface ApplyAttempt {
 export const REVERT_REASONS = {
   /** An operator pressed the button. A change of mind, not a failure. */
   operatorRequested: 'the operator asked for it to be reverted',
+  /** The window's traffic check failed after passing before the change. A failure of the change. */
+  dataPlaneFailed: 'client traffic stopped working',
+  /** The daemon stopped while an apply was running; nothing confirms what it reached. */
+  interrupted: 'the daemon stopped during the apply',
 } as const;
 
 /** States in which the device did not end up running what it was asked to run. */

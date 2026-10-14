@@ -22,6 +22,7 @@ import { Network } from '../pages/Network.tsx';
 import { Routing } from '../pages/Routing.tsx';
 import { Tunnels } from '../pages/Tunnels.tsx';
 import { Settings } from '../pages/Settings.tsx';
+import { Diagnostics } from '../pages/Diagnostics.tsx';
 import { PlanReview } from '../components/PlanReview.tsx';
 import { ConfirmationWindow } from '../components/ConfirmationWindow.tsx';
 import { EditingElsewhere } from '../components/EditingElsewhere.tsx';
@@ -44,6 +45,7 @@ import {
   extremeSystem,
   extremeTransactions,
   extremeTokens,
+  extremeRoutingDiagnostics,
   EXTREME_POWER_OFF_FAILURE,
 } from './fixtures.ts';
 import type { StatusResponse } from '../lib/api.ts';
@@ -91,6 +93,8 @@ const ROUTES: [RegExp, () => unknown][] = [
   [/\/api\/transactions/, extremeTransactions],
   // Added 2026-10-07 with the tokens card on Settings.
   [/\/api\/tokens/, extremeTokens],
+  // Added 2026-10-14 with the Diagnostics screen.
+  [/\/api\/diagnostics\/routing/, extremeRoutingDiagnostics],
 ];
 
 declare global {
@@ -141,6 +145,9 @@ createRoot(document.getElementById('root') as HTMLElement).render(
           */}
         <div data-screen="tunnels">
           <Tunnels />
+        </div>
+        <div data-screen="diagnostics">
+          <Diagnostics />
         </div>
         <div data-screen="settings">
           <Settings live={extremeStatus() as unknown as StatusResponse} />

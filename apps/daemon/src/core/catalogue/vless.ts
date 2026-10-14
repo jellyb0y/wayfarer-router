@@ -43,7 +43,7 @@
 
 import type { VlessConfig } from '@wayfarer/schemas';
 import { PATHS, type ManagedFile } from '../desired-state.ts';
-import type { CarrierChoice, CatalogueEntry, EntryPlanContext, EntryPlanResult } from './index.ts';
+import type { CarrierChoice, CarrierLogLevel, CatalogueEntry, EntryPlanContext, EntryPlanResult } from './index.ts';
 import { secretText } from './values.ts';
 import { sessionLessFailsClosed, sessionLessLiveness } from './session-less.ts';
 
@@ -185,7 +185,7 @@ function nativeOutbound(config: VlessConfig): Record<string, unknown> {
  * on the command line below rather than left to be inferred, because one statement of it is cheap
  * and a silent non-start is not.
  */
-function xrayConfig(config: VlessConfig, port: number): string {
+function xrayConfig(config: VlessConfig, port: number, logLevel: CarrierLogLevel = 'warning'): string {
   const user: Record<string, unknown> = { id: secretText(config.id) };
   if (config.encryption !== undefined) user['encryption'] = secretText(config.encryption);
   if (config.flow !== undefined) user['flow'] = config.flow;
@@ -246,7 +246,7 @@ function xrayConfig(config: VlessConfig, port: number): string {
   }
 
   const document = {
-    log: { loglevel: 'warning' },
+    log: { loglevel: logLevel },
     inbounds: [
       {
         // Loopback only. A listener on any other address is a proxy open to whatever network this
@@ -359,7 +359,7 @@ export const vlessEntry: CatalogueEntry<'vless'> = {
     const files: ManagedFile[] = [
       {
         path: configPath,
-        content: xrayConfig(config, port),
+        content: xrayConfig(config, port, context.carrierLogLevel),
         // 0600: this file carries the account id, and the encryption parameter is key material.
         mode: 0o600,
         credentials: true,

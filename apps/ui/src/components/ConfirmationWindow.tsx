@@ -75,6 +75,13 @@ export interface ConfirmationWindowProps {
   busy?: boolean;
   /** Injectable so the countdown can be tested without waiting. */
   now?: () => number;
+  /**
+   * The device's traffic check inside this window, when it has one: whether a name resolves and a request
+   * leaves along a client's path. `failed` means the device has already started putting the change back.
+   */
+  dataPlane?: { state: 'pending' | 'passed' | 'failed' | 'advisory' | 'skipped'; detail: string; latencyMs?: number } | null;
+  /** True once the device reports this transaction reverted, by whatever asked. */
+  reverted?: boolean;
 }
 
 /**
@@ -101,6 +108,8 @@ export function ConfirmationWindow({
   onConfirm,
   busy,
   now,
+  dataPlane,
+  reverted,
 }: ConfirmationWindowProps): ReactElement {
   const clock = now ?? ((): number => Date.now());
   const [, setTick] = useState(0);
@@ -165,6 +174,18 @@ export function ConfirmationWindow({
     );
   }
 
+  if (reverted === true) {
+    return (
+      <div className="panel warn" role="status">
+        <h3>Undone</h3>
+        <p>
+          The device put the previous configuration back
+          {dataPlane?.state === 'failed' ? `, because client traffic stopped working after the change: ${dataPlane.detail}` : '.'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="panel danger" role="alert" aria-live="assertive" tabIndex={-1} ref={panel}>
       <h3>{expired ? 'Undoing the change' : `Not confirmed yet — ${left}s left`}</h3>
@@ -184,10 +205,12 @@ export function ConfirmationWindow({
 
       {expired ? null : (
         <p className="hint">
-          Nothing undoes this change before the countdown ends, unless someone asks or the device
-          restarts.
+          Before the countdown ends the change is undone only if someone asks, the device restarts, or the
+          device sees that client traffic stopped working after it — having worked before.
         </p>
       )}
+
+      {expired || dataPlane == null ? null : <TrafficCheck reading={dataPlane} />}
 
       {contact === 'lost' && !expired ? (
         <p className="contact-lost">
@@ -237,5 +260,26 @@ export function NoActionNotice({ blastRadius }: { blastRadius: string }): ReactE
         Confirming is only needed to <em>keep</em> the change. Doing nothing is always the safe choice.
       </p>
     </div>
+  );
+}
+
+/**
+ * What the device's own traffic check has seen. Shown in the device's words: "passed" is the evidence a
+ * person usually looks for before keeping a change, and it is the one thing this page could not measure
+ * for itself — it reaches the device, not the internet behind it.
+ */
+function TrafficCheck({ reading }: { reading: NonNullable<ConfirmationWindowProps['dataPlane']> }): ReactElement {
+  const text = {
+    pending: 'Checking that names resolve and pages load through the new configuration…',
+    passed: `Traffic works through the new configuration${reading.latencyMs === undefined ? '' : ` (${String(reading.latencyMs)} ms)`}.`,
+    failed: 'Client traffic stopped working after this change; the device is putting the previous configuration back.',
+    advisory: 'Client traffic does not work, but it did not work before this change either, so it is left to you.',
+    skipped: 'This change was not checked for traffic.',
+  }[reading.state];
+  return (
+    <p className={reading.state === 'passed' ? 'note' : reading.state === 'pending' ? 'muted' : 'note bad'} role="status">
+      {text}
+      {reading.state === 'pending' || reading.state === 'passed' ? null : <span className="muted"> {reading.detail}</span>}
+    </p>
   );
 }

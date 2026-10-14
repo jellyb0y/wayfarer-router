@@ -207,6 +207,27 @@ export const SystemResponse = Type.Object(
       }),
     ),
     warnings: Type.Array(Type.String()),
+    /**
+     * Software updates through the API: whether this device accepts one (a signing key is installed),
+     * whether there is a kept copy to go back to, and how the last one ended. Optional so a daemon built
+     * before it still answers this schema.
+     */
+    update: Type.Optional(
+      Type.Object({
+        keyInstalled: Type.Boolean(),
+        rollbackAvailable: Type.Boolean(),
+        last: Type.Union([
+          Type.Object({
+            phase: Type.String(),
+            from: Type.Union([Type.String(), Type.Null()]),
+            to: Type.Union([Type.String(), Type.Null()]),
+            at: Type.String(),
+            detail: Type.Optional(Type.String()),
+          }),
+          Type.Null(),
+        ]),
+      }),
+    ),
   },
   { $id: 'SystemResponse' },
 );
@@ -763,6 +784,12 @@ export const DebugLevelRequest = Type.Object(
      * cannot fill the 200 MB journal and evict the lines that mattered.
      */
     minutes: Type.Integer({ minimum: 1, maximum: 120 }),
+    /**
+     * Whose log: the daemon's own (the default), or the external tunnel clients'. Raising the clients'
+     * level rewrites their configuration and restarts them — a `service` change, applied from the running
+     * document so nothing unapplied rides along — and the same happens when it lowers itself again.
+     */
+    target: Type.Optional(Type.Union([Type.Literal('daemon'), Type.Literal('carriers')])),
   },
   { $id: 'DebugLevelRequest' },
 );
@@ -772,6 +799,8 @@ export const DebugLevelResponse = Type.Object(
   {
     level: Type.String(),
     revertsAt: Type.Union([Type.String(), Type.Null()]),
+    /** For `target: "carriers"`: the transaction that restarted the clients, when one was needed. */
+    transaction: Type.Optional(Type.String()),
   },
   { $id: 'DebugLevelResponse' },
 );
@@ -833,6 +862,25 @@ export const TunnelRestartResponse = Type.Object(
 );
 export type TunnelRestartResponse = Static<typeof TunnelRestartResponse>;
 
+/** `POST /api/groups/:id/refresh`: what one refresh of a group, asked for by a person, did. */
+export const GroupRefreshResponse = Type.Object(
+  {
+    group: Type.String(),
+    /** The device now runs what the feed offers. False for a failed fetch, a held change or a failed apply. */
+    ok: Type.Boolean(),
+    message: Type.String(),
+    nodeCount: Type.Integer({ minimum: 0 }),
+    added: Type.Array(Type.String()),
+    updated: Type.Array(Type.String()),
+    removed: Type.Array(Type.String()),
+    /** Per node, the link parameters nothing in the parser read. A server may depend on one of them. */
+    ignoredParams: Type.Array(Type.Object({ node: Type.String(), params: Type.Array(Type.String()) })),
+    transaction: Type.Optional(Type.String()),
+  },
+  { $id: 'GroupRefreshResponse' },
+);
+export type GroupRefreshResponse = Static<typeof GroupRefreshResponse>;
+
 export const ALL_SCHEMAS = [
   ErrorBody,
   ErrorResponse,
@@ -856,6 +904,7 @@ export const ALL_SCHEMAS = [
   PowerOffRequest,
   PowerOffResponse,
   TunnelRestartResponse,
+  GroupRefreshResponse,
 ];
 
 /* ── the profile document and its secrets ────────────────────────────────────────────────── */

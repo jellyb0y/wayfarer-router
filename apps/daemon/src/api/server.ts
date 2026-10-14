@@ -49,12 +49,23 @@ import {
   SystemResponse,
   TokenSummary,
   TunnelRestartResponse,
+  GroupRefreshResponse,
+  TUNNEL_PROTOCOLS,
+  type ProfileDocument,
+  type TunnelProtocol,
 } from '@wayfarer/schemas';
 import type { Platform } from '../platform/index.ts';
 import type { Store, TokenScope } from '../state/store.ts';
 import { ProfileUnreadableError } from '../state/profiles.ts';
 import { summarise, type DriftReport } from '../core/drift.ts';
 import type { ObserverReport } from '../core/observers.ts';
+import type { RefreshNowResult } from '../core/subscription-refresh.ts';
+import { applyInFlight } from '../core/apply.ts';
+import { testTunnel } from '../core/tunnel-test.ts';
+import { readUpdateState, stageBundle, updatePaths, type UpdateState } from '../core/update.ts';
+import { verifyBundle } from '../core/update-bundle.ts';
+import { describePolicyRules, deviceBypassRules, readPolicyRules } from '../core/policy-rules.ts';
+import { createCoreApi, type CoreApi } from '../platform/core-api.ts';
 import { readStamp, type MonotonicStamp } from '../core/credential-expiry.ts';
 import { windowCountdown } from '../core/transactions.ts';
 import { collectFleet, duplicateIdentities } from '../core/fleet.ts';
@@ -148,6 +159,21 @@ export interface ServerContext {
    * `POWER_OFF_DELAY_MS`; a test shortens it so it can watch both sides of the delay.
    */
   powerOffDelayMs?: number;
+  /**
+   * Refreshes one group of the active profile now. Optional for the reason `profileRoutes` is; absent, the
+   * route answers 503 rather than pretending a refresh happened.
+   */
+  refreshGroup?: (groupId: string) => Promise<RefreshNowResult>;
+  /**
+   * Raises the external tunnel clients' log level for a while, by applying the running document with the
+   * new level. Optional for the reason `profileRoutes` is.
+   */
+  setCarrierLogLevel?: (
+    level: string,
+    minutes: number,
+  ) => Promise<{ level: string; revertsAt: string | null; transaction?: string } | { error: { code: string; message: string } }>;
+  /** The proxy core's control interface, for the diagnostics routes. Read at call time: the bind can move. */
+  coreApi?: () => CoreApi;
 }
 
 /**
@@ -927,14 +953,15 @@ function registerTunnelRestart(app: FastifyInstance, context: ServerContext): vo
           },
         });
       }
-      const applying = context.profileRoutes?.profiles.recentTransactions(5).find((row) => row.state === 'applying');
-      if (applying !== undefined) {
+      const profiles = context.profileRoutes?.profiles;
+      if (profiles !== undefined && applyInFlight(profiles)) {
+        const latest = profiles.recentTransactions(1)[0];
         return reply.status(409).send({
           error: {
             code: 'apply_in_progress',
-            message: `Transaction ${applying.id} is being applied and restarts these units itself. Nothing was done.`,
+            message: 'An apply is running and restarts these units itself. Nothing was done.',
             hint: 'try again once the apply has finished',
-            detail: { transaction: applying.id },
+            ...(latest === undefined ? {} : { detail: { transaction: latest.id } }),
           },
         });
       }
@@ -978,6 +1005,405 @@ function registerTunnelRestart(app: FastifyInstance, context: ServerContext): vo
       } finally {
         underWay.delete(id);
       }
+    },
+  );
+}
+
+/**
+ * `GET /api/diagnostics/routing`: what a shell was needed for on 2026-10-11, in one answer.
+ *
+ * That evening the internet was gone after a reboot, and finding out why took `ip rule`, `ip route get`
+ * to the tunnel server, and the core's selectors, read over ssh: the device's own-traffic rules were
+ * missing, so the tunnel clients' connections looped into the tunnel and every selector stood on `block`.
+ * Each of those readings is here, and for the rules beside what this device expects them to be.
+ */
+function registerRoutingDiagnostics(app: FastifyInstance, context: ServerContext): void {
+  const typed = app.withTypeProvider<TypeBoxTypeProvider>();
+  typed.get(
+    '/api/diagnostics/routing',
+    {
+      preHandler: requireScope('read'),
+      schema: {
+        summary: 'The policy rules, the route to every tunnel server, and what each selector holds.',
+        description:
+          '`rules.present` is every IPv4 policy rule as the kernel reports it (`null` when it could not be read). ' +
+          '`rules.bypass` is each of the device\'s own-traffic rules with whether it is present, and ' +
+          '`rules.coreCaptureMissing` says the core runs and none of its rules are there. `servers` is, for every ' +
+          'tunnel and group member of the active profile with an address, how this device would send to it — a ' +
+          'tunnel server reached through a tunnel (`throughTunnel: true`) is the loop that takes every tunnel ' +
+          'down. `selectors` is what each of the core\'s selectors has chosen, `null` when the core does not answer.',
+      },
+    },
+    async () => {
+      const platform = context.platform;
+      const rules = await platform.net.rules().catch(() => null);
+      const coreState = await platform.systemd.state('wf-core.service').catch(() => null);
+      const coreActive = coreState?.isActive === true;
+      const reading = rules === null ? null : readPolicyRules({ rules, timePorts: context.config.timePorts, coreActive });
+      const bypass = deviceBypassRules(context.config.timePorts).map((rule) => ({
+        priority: rule.priority,
+        selector: rule.selector,
+        present: rules === null ? null : rules.some((found) => found.priority === rule.priority && rule.matches(found)),
+      }));
+
+      const activeId = context.store.device().activeProfileId;
+      const document = (activeId === null ? null : context.profileRoutes?.profiles.get(activeId)?.document ?? null) as ProfileDocument | null;
+      const endpoints: { id: string; server: string }[] = [];
+      for (const tunnel of document?.tunnels ?? []) {
+        const server = (tunnel.config as { server?: unknown }).server;
+        if (typeof server === 'string') endpoints.push({ id: tunnel.id, server });
+      }
+      for (const group of document?.groups ?? []) {
+        for (const member of group.members) endpoints.push({ id: member.id, server: member.config.server });
+      }
+      const servers = await Promise.all(
+        endpoints.map(async (entry) => {
+          // A name is resolved by the client itself; asking the kernel about one is not a question it answers.
+          if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(entry.server)) return { ...entry, route: null, throughTunnel: null, note: 'a name: resolved by the client' };
+          const route = await platform.net.routeTo(entry.server).catch(() => null);
+          return { ...entry, route, throughTunnel: route === null ? null : /^tun/.test(route.device ?? ''), note: null };
+        }),
+      );
+
+      const core = context.coreApi?.();
+      const selectors =
+        core === undefined || !coreActive
+          ? null
+          : await core
+              .proxies()
+              .then((all) => all.filter((proxy) => proxy.type.toLowerCase() === 'selector').map(({ name, now, all: members }) => ({ name, now, members })))
+              .catch(() => null);
+
+      return {
+        rules: {
+          present: rules,
+          bypass,
+          coreActive,
+          coreCaptureMissing: reading?.coreCaptureMissing ?? null,
+          summary: reading === null ? 'the policy rules could not be read' : describePolicyRules(reading),
+        },
+        servers,
+        selectors,
+        watch: context.observers().find((observer) => observer.name === 'policy-rules') ?? null,
+      };
+    },
+  );
+}
+
+/**
+ * `POST /api/tunnels/test`: does this configuration connect, before anything is saved or applied.
+ *
+ * See `core/tunnel-test.ts` for the symptom and the method. The guards:
+ *
+ * * **`apply`**: the body may carry a credential in clear, and the test opens a connection with it.
+ * * **One test at a time.** Each starts a core of its own, and a board this size has no room for a queue.
+ * * **Stored secrets by reference.** A form holds `{"$keep": true}` where a secret is stored; with
+ *   `tunnelId` (or `groupId` and `memberId`) the stored value is used there, read inside the device. The
+ *   secret never has to make a round trip through the page to be tested.
+ */
+function registerTunnelTest(app: FastifyInstance, context: ServerContext): void {
+  const typed = app.withTypeProvider<TypeBoxTypeProvider>();
+  let underWay = false;
+
+  typed.post(
+    '/api/tunnels/test',
+    {
+      preHandler: requireScope('apply'),
+      schema: {
+        summary: 'Try a tunnel configuration through a throwaway client, without saving or applying anything.',
+        description:
+          'Give `{ protocol, config }` for a configuration being edited (with `tunnelId` so `{"$keep": true}` ' +
+          'positions read the stored secret), `{ tunnelId }` alone for a stored tunnel, or `{ groupId, memberId }` ' +
+          'for a group member. The answer is `{ ok, latencyMs, endpoint }` or `{ ok: false, failure: { stage, ' +
+          'message }, log }`, where `log` is the clients\' last lines with credentials removed. Tunnels that are ' +
+          'an interface of their own (OpenVPN, Cloak) answer `failure.stage: "unsupported"`. Refused with 409 while ' +
+          'another test runs.',
+        body: Type.Object(
+          {
+            protocol: Type.Optional(Type.String()),
+            config: Type.Optional(Type.Unknown()),
+            tunnelId: Type.Optional(Type.String()),
+            groupId: Type.Optional(Type.String()),
+            memberId: Type.Optional(Type.String()),
+          },
+          { additionalProperties: false },
+        ),
+      },
+    },
+    async (request, reply) => {
+      const routes = context.profileRoutes;
+      if (routes === undefined) {
+        return reply.status(503).send({ error: { code: 'profiles_unavailable', message: 'The profile machinery is not running.' } });
+      }
+      const activeId = context.store.device().activeProfileId;
+      const document = (activeId === null ? null : routes.profiles.get(activeId)?.document ?? null) as ProfileDocument | null;
+      const body = request.body;
+
+      let protocol: string | undefined = body.protocol;
+      let config: unknown = body.config;
+      if (body.groupId !== undefined) {
+        const member = document?.groups?.find((group) => group.id === body.groupId)?.members.find((entry) => entry.id === body.memberId);
+        if (member === undefined) {
+          return reply.status(404).send({ error: { code: 'not_found', message: `The active profile has no member "${String(body.memberId)}" in group "${body.groupId}".` } });
+        }
+        protocol = member.protocol;
+        config = member.config;
+      } else if (body.tunnelId !== undefined) {
+        const stored = document?.tunnels.find((tunnel) => tunnel.id === body.tunnelId);
+        if (stored === undefined && config === undefined) {
+          return reply.status(404).send({ error: { code: 'not_found', message: `The active profile has no tunnel "${body.tunnelId}".` } });
+        }
+        protocol ??= stored?.protocol;
+        config = config === undefined ? stored?.config : withStoredSecrets(config, stored?.config);
+      }
+      if (protocol === undefined || config === undefined || !(TUNNEL_PROTOCOLS as readonly string[]).includes(protocol)) {
+        return reply.status(400).send({
+          error: { code: 'nothing_to_test', message: 'Give a protocol and a configuration, a stored tunnel id, or a group member.' },
+        });
+      }
+      if (underWay) {
+        return reply.status(409).send({ error: { code: 'test_under_way', message: 'Another tunnel test is running. Nothing was started.' } });
+      }
+
+      underWay = true;
+      try {
+        const inventory = await routes.inventory();
+        const path = (name: string): string | null => inventory.binaries.find((entry) => entry.name === name && entry.present)?.path ?? null;
+        const result = await testTunnel(
+          {
+            scratch: context.platform.scoped.scratch,
+            spawn: context.platform.scoped.spawn,
+            freePort: context.platform.scoped.freePort,
+            coreAvailable: async (bind) => await createCoreApi({ bind }).available(),
+            check: async (bind, outbound, url, timeoutMs) => await createCoreApi({ bind }).check(outbound, url, timeoutMs),
+            binaries: async () => ({ core: path('sing-box'), xray: path('xray') }),
+          },
+          {
+            protocol: protocol as TunnelProtocol,
+            config,
+            endpoints: document?.policy.probes.endpoints ?? ['http://cp.cloudflare.com/generate_204'],
+          },
+        );
+        const who = requestedBy(request, context);
+        context.store.recordEvent({
+          level: 'info',
+          kind: result.ok ? 'tunnel.test-passed' : 'tunnel.test-failed',
+          summary: result.ok
+            ? `a ${protocol} configuration answered in ${String(result.latencyMs)} ms, tested on request by ${who.label}`
+            : `a ${protocol} configuration did not connect (${result.failure?.stage ?? 'unknown'}: ${result.failure?.message ?? ''}), tested by ${who.label}`,
+          detail: { requestedBy: who.record, tunnel: body.tunnelId ?? body.memberId ?? null, stage: result.failure?.stage ?? null },
+        });
+        return reply.status(200).send(result);
+      } finally {
+        underWay = false;
+      }
+    },
+  );
+}
+
+/**
+ * A form's configuration with every `{"$keep": true}` (and read-shaped `{"$set": …}`) replaced by the stored
+ * value at the same position. Positions the stored configuration does not have stay as they are, so the
+ * entry refuses them in its own words.
+ */
+function withStoredSecrets(submitted: unknown, stored: unknown): unknown {
+  if (typeof submitted !== 'object' || submitted === null || Array.isArray(submitted)) return submitted;
+  const record = submitted as Record<string, unknown>;
+  if ('$keep' in record || '$set' in record) return stored ?? submitted;
+  const base = typeof stored === 'object' && stored !== null && !Array.isArray(stored) ? (stored as Record<string, unknown>) : {};
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, withStoredSecrets(value, base[key])]));
+}
+
+/** What `GET /api/system` says about updates. Read each time: another process (`way update`) writes it. */
+async function updateReading(context: ServerContext): Promise<{ keyInstalled: boolean; rollbackAvailable: boolean; last: UpdateState | null }> {
+  const install = context.platform.install;
+  if (install?.exists === undefined) return { keyInstalled: false, rollbackAvailable: false, last: null };
+  const paths = updatePaths({ installDir: context.config.installDir, stateDir: context.config.stateDir });
+  return {
+    keyInstalled: await install.exists(context.config.updateKeyPath),
+    rollbackAvailable: await install.exists(`${paths.previous}/daemon.cjs`),
+    last: await readUpdateState(install, paths),
+  };
+}
+
+/**
+ * `POST /api/system/update` and `POST /api/system/update/rollback`: replacing the software without a shell.
+ *
+ * The bundle is checked here — signature, every file's hash, every path inside what an update may replace
+ * (`core/update-bundle.ts`) — and written to a staging directory; then `way update --staged` is started as
+ * a unit of its own and this answers `202`. The install happens outside the daemon because the daemon is
+ * what it stops; it keeps the running bundle, and puts it back if the new one does not answer within 30 s.
+ *
+ * Refused while an apply runs or a window is open: the new daemon starts by sweeping unconfirmed windows
+ * (`sweepUnconfirmed`), and an update would turn somebody's pending change into a revert they did not ask
+ * for.
+ */
+function registerSystemUpdate(app: FastifyInstance, context: ServerContext): void {
+  const typed = app.withTypeProvider<TypeBoxTypeProvider>();
+  const LIMIT = 64 * 1024 * 1024;
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: LIMIT }, (_request, body, done) => done(null, body));
+
+  const busy = (): string | null => {
+    const profiles = context.profileRoutes?.profiles;
+    if (profiles === undefined) return null;
+    if (applyInFlight(profiles)) return 'an apply is running';
+    const open = profiles.unconfirmedTransaction();
+    return open === null ? null : `transaction ${open.id} is waiting for confirmation`;
+  };
+
+  const start = async (argv: string[], what: string): Promise<{ ok: boolean; message: string }> =>
+    await context.platform.systemd.runOnce({
+      unit: 'wayfarer-update.service',
+      description: `Wayfarer ${what}`,
+      argv: [context.config.wayBinary, 'update', ...argv],
+    });
+
+  typed.post(
+    '/api/system/update',
+    {
+      preHandler: requireScope('admin'),
+      bodyLimit: LIMIT,
+      schema: {
+        summary: 'Install a signed software bundle. The previous one comes back if the new one does not answer.',
+        description:
+          'The body is the bundle file (`application/octet-stream`, built and signed by `scripts/bundle.mjs`). It ' +
+          'is refused with 409 when no signing key is installed on the device or a transaction is open, and with ' +
+          '422 when its signature, a file hash or a path does not hold. Otherwise it is staged and `way update` ' +
+          'is started in a unit of its own; the answer is `202` with the version, and the daemon restarts within ' +
+          'seconds. Follow it with `GET /api/health` and then `GET /api/system`, whose `update.last` says how it ' +
+          'ended and whose `version` says what runs.',
+      },
+    },
+    async (request, reply) => {
+      const why = busy();
+      if (why !== null) return reply.status(409).send({ error: { code: 'transaction_open', message: `Not now: ${why}. Nothing was installed.` } });
+      const key = await context.platform.install.readText(context.config.updateKeyPath);
+      if (key === null) {
+        return reply.status(409).send({
+          error: {
+            code: 'update_key_missing',
+            message: `No signing key is installed at ${context.config.updateKeyPath}, so no bundle can be verified and none is installed.`,
+            hint: 'Install the public key once with deploy/install.sh --update-key <file>.',
+          },
+        });
+      }
+      const body = request.body;
+      if (!Buffer.isBuffer(body)) {
+        return reply.status(415).send({ error: { code: 'not_a_bundle', message: 'Send the bundle file as application/octet-stream.' } });
+      }
+      const verdict = verifyBundle(body, key);
+      const who = requestedBy(request, context);
+      if (!verdict.ok) {
+        context.store.recordEvent({ level: 'warn', kind: 'system.update-refused', summary: `an update bundle from ${who.label} was refused: ${verdict.reason}` });
+        return reply.status(422).send({ error: { code: 'bundle_refused', message: verdict.reason } });
+      }
+      await stageBundle({ tree: context.platform.install }, { installDir: context.config.installDir, stateDir: context.config.stateDir }, verdict.bundle);
+      const started = await start(['--staged'], `update to ${verdict.bundle.manifest.version}`);
+      if (!started.ok) {
+        return reply.status(503).send({ error: { code: 'updater_unavailable', message: `The installer could not be started: ${started.message}` } });
+      }
+      context.store.recordEvent({
+        level: 'info',
+        kind: 'system.update-started',
+        summary: `update to ${verdict.bundle.manifest.version} started by ${who.label}`,
+        detail: { requestedBy: who.record, version: verdict.bundle.manifest.version },
+      });
+      return reply.status(202).send({ version: verdict.bundle.manifest.version, from: context.version });
+    },
+  );
+
+  typed.post(
+    '/api/system/update/rollback',
+    {
+      preHandler: requireScope('admin'),
+      schema: {
+        summary: 'Go back to the bundle the last update kept. The one running now is kept in its place.',
+        description: 'Refused with 409 when there is no kept copy or a transaction is open. Answers `202`; follow it as an update.',
+      },
+    },
+    async (request, reply) => {
+      const why = busy();
+      if (why !== null) return reply.status(409).send({ error: { code: 'transaction_open', message: `Not now: ${why}. Nothing was changed.` } });
+      const reading = await updateReading(context);
+      if (!reading.rollbackAvailable) {
+        return reply.status(409).send({ error: { code: 'no_rollback', message: 'No earlier bundle is kept on this device.' } });
+      }
+      const started = await start(['--rollback'], 'rollback to the kept bundle');
+      if (!started.ok) {
+        return reply.status(503).send({ error: { code: 'updater_unavailable', message: `The installer could not be started: ${started.message}` } });
+      }
+      const who = requestedBy(request, context);
+      context.store.recordEvent({ level: 'warn', kind: 'system.update-rollback-started', summary: `rollback to the kept bundle started by ${who.label}` });
+      return reply.status(202).send({ from: context.version });
+    },
+  );
+}
+
+/**
+ * `POST /api/groups/:id/refresh`: refresh one group from its subscription now, on request.
+ *
+ * The timer refreshes a group when its `refreshHours` says; this is the same refresh, asked for. It exists
+ * because a person who has just been told the provider changed its servers has no other way to make the
+ * device look, short of a shell. Every rule of an unattended refresh still holds (`core/subscription-
+ * refresh.ts`): a change wider than `service` is held rather than applied, so this route never opens a
+ * confirmation window, and the answer says what was held and why.
+ */
+function registerGroupRefresh(app: FastifyInstance, context: ServerContext): void {
+  const typed = app.withTypeProvider<TypeBoxTypeProvider>();
+
+  typed.post(
+    '/api/groups/:id/refresh',
+    {
+      preHandler: requireScope('apply'),
+      schema: {
+        summary: 'Refresh one group of the active profile from its subscription now.',
+        description:
+          'Fetches the feed, replaces the group\'s members with what it offers and applies the change when it is ' +
+          '`hot` or `service`; a wider change is held and reported, never applied from here. `ok: false` with a ' +
+          'message for a failed fetch, an empty feed, a held change or a failed apply (which restores the previous ' +
+          'profile). Refused with 404 for a group the active profile does not have, and with 409 while a ' +
+          'transaction is open or the group is turned off.',
+        params: Type.Object({ id: Type.String() }),
+        response: { 200: GroupRefreshResponse, 403: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse, 503: ErrorResponse },
+      },
+    },
+    async (request, reply) => {
+      if (context.refreshGroup === undefined) {
+        return reply.status(503).send({
+          error: { code: 'refresh_unavailable', message: 'The subscription refresh is not running on this daemon. Nothing was done.' },
+        });
+      }
+      const id = request.params.id;
+      const result = await context.refreshGroup(id);
+      if ('refused' in result) {
+        const refusals = {
+          no_active_profile: [409, 'No profile is active, so there is no group to refresh.'],
+          not_found: [404, `The active profile has no group "${id}".`],
+          group_disabled: [409, `Group "${id}" is turned off; turn it on to refresh it.`],
+          transaction_open: [409, 'A transaction is open; refresh once it has been confirmed or reverted.'],
+        } as const;
+        const [status, message] = refusals[result.refused];
+        return reply.status(status).send({ error: { code: result.refused, message: `${message} Nothing was done.` } });
+      }
+      const { report } = result;
+      const who = requestedBy(request, context);
+      context.store.recordEvent({
+        level: 'info',
+        kind: 'subscription.refresh-requested',
+        summary: `group "${id}" refreshed on request by ${who.label}: ${report.said}`,
+        detail: { group: id, requestedBy: who.record, ok: report.ok },
+      });
+      return reply.status(200).send({
+        group: report.group,
+        ok: report.ok,
+        message: report.said,
+        nodeCount: report.nodeCount,
+        added: report.added,
+        updated: report.updated,
+        removed: report.removed,
+        ignoredParams: report.ignoredParams,
+        ...(report.transaction === undefined ? {} : { transaction: report.transaction }),
+      });
     },
   );
 }
@@ -1096,12 +1522,17 @@ function registerRoutes(app: FastifyInstance, context: ServerContext, accessInde
         },
         binaries: inventory.binaries,
         warnings: [...context.configWarnings, ...inventory.notes],
+        update: await updateReading(context),
       };
     },
   );
 
   registerPowerOff(typed, context);
   registerTunnelRestart(typed, context);
+  registerGroupRefresh(typed, context);
+  registerTunnelTest(typed, context);
+  registerRoutingDiagnostics(typed, context);
+  registerSystemUpdate(typed, context);
 
   typed.get(
     '/api/capabilities',
@@ -1564,12 +1995,20 @@ function registerRoutes(app: FastifyInstance, context: ServerContext, accessInde
     {
       preHandler: requireScope('admin'),
       schema: {
-        summary: 'Raise the log level for a bounded period. It lowers itself again.',
+        summary: 'Raise the log level — the daemon\'s, or the tunnel clients\' — for a bounded period. It lowers itself again.',
         body: DebugLevelRequest,
-        response: { 200: DebugLevelResponse, 403: ErrorResponse },
+        response: { 200: DebugLevelResponse, 403: ErrorResponse, 409: ErrorResponse, 503: ErrorResponse },
       },
     },
-    async (request) => context.setLogLevel(request.body.level, request.body.minutes),
+    async (request, reply) => {
+      if (request.body.target !== 'carriers') return context.setLogLevel(request.body.level, request.body.minutes);
+      if (context.setCarrierLogLevel === undefined) {
+        return reply.status(503).send({ error: { code: 'carriers_unavailable', message: 'The tunnel clients cannot be reconfigured by this daemon.' } });
+      }
+      const result = await context.setCarrierLogLevel(request.body.level, request.body.minutes);
+      if ('error' in result) return reply.status(409).send({ error: result.error });
+      return result;
+    },
   );
 
   typed.post(

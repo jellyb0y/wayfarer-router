@@ -18,11 +18,13 @@
  * is *a feed*.
  */
 import type { ReactElement } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../../lib/api.ts';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ApiFailure, api, type GroupRefreshResult } from '../../lib/api.ts';
 import { readAt, useDraft } from '../../lib/draft.ts';
 import { Card, CheckField, Fold, NumberField, SecretField, TextField } from '../ui/index.tsx';
 import { CarrierFields } from './common.tsx';
+import { TunnelTest } from './test.tsx';
 
 type Group = Record<string, unknown>;
 
@@ -100,6 +102,7 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
                         {reading === undefined ? 'not measured yet' : reading.state}
                         {selected ? ', in use' : ''}
                       </span>
+                      <TunnelTest subject={{ groupId: id, memberId: String(member['id']) }} />
                     </li>
                   );
                 })}
@@ -107,6 +110,7 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
               </ul>
 
               <div className="row-actions">
+                <GroupRefresh id={id} />
                 <button type="button" onClick={() => draft.set('/groups', groups.filter((_unused, other) => other !== index))}>
                   Remove
                 </button>
@@ -151,5 +155,60 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
         </button>
       </div>
     </Card>
+  );
+}
+
+/**
+ * "Refresh now": the same refresh the timer does, asked for. `refreshHours: 0` promised "only when you
+ * ask", and until this button there was no way to ask.
+ *
+ * It acts on the **stored** group of the **active** profile, not on this draft: a refresh is a write the
+ * device makes to its own configuration. With unsaved or unapplied edits the device holds the change and
+ * says so, and the answer is shown in its own words rather than reworded.
+ *
+ * Parameters a link carried and nothing read are listed, because that is the only place a person learns
+ * that a member is configured without something its server may require.
+ */
+function GroupRefresh({ id }: { id: string }): ReactElement {
+  const queries = useQueryClient();
+  const [outcome, setOutcome] = useState<{ ok: boolean; text: string; ignored: GroupRefreshResult['ignoredParams'] } | null>(null);
+  const refresh = useMutation({
+    mutationFn: () => api.refreshGroup(id),
+    retry: false,
+    onSuccess: (answer) => {
+      setOutcome({ ok: answer.ok, text: answer.message, ignored: answer.ignoredParams });
+      void queries.invalidateQueries();
+    },
+    onError: (error: unknown) => {
+      const text = error instanceof ApiFailure ? error.error.message : error instanceof Error ? error.message : String(error);
+      setOutcome({ ok: false, text, ignored: [] });
+    },
+  });
+  return (
+    <>
+      <button
+        type="button"
+        title="Reads the feed now and applies what changed, when it can without a confirmation."
+        disabled={refresh.isPending}
+        onClick={() => {
+          setOutcome(null);
+          refresh.mutate();
+        }}
+      >
+        {refresh.isPending ? 'Refreshing…' : 'Refresh now'}
+      </button>
+      {outcome === null ? null : (
+        <div role="status">
+          <p className={outcome.ok ? 'note' : 'note bad'}>{outcome.text}</p>
+          {outcome.ignored.length === 0 ? null : (
+            <p className="note bad">
+              Link parameters this device does not use:{' '}
+              {outcome.ignored.map((entry) => `${entry.node} (${entry.params.join(', ')})`).join('; ')}. A server that
+              requires one of them will not accept the connection.
+            </p>
+          )}
+        </div>
+      )}
+    </>
   );
 }

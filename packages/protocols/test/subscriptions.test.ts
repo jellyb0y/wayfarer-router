@@ -136,6 +136,27 @@ test('a TCP link disguised as HTTP keeps the disguise, because the server drops 
   assert.equal(vlessOf(plain).headerType, undefined);
 });
 
+test('a parameter nothing read is reported with the node, and one read and dropped is not', () => {
+  const node = parseSubscription(
+    'vless://11111111-2222-3333-4444-555555555555@203.0.113.7:443?security=reality&sni=a.example&pbk=K&sid=ab&spx=%2F&pqv=Z&headerType=none#R',
+  ).nodes[0]!;
+  // `headerType=none` is read and deliberately left off; `spx` and `pqv` reach nothing in the draft.
+  assert.deepEqual(node.ignoredParams, ['pqv', 'spx']);
+  assert.equal(vlessOf(node).realityPublicKey, 'K');
+
+  const clean = parseSubscription(
+    'vless://11111111-2222-3333-4444-555555555555@203.0.113.7:443?security=tls&sni=a.example&type=ws&path=%2Fws#C',
+  ).nodes[0]!;
+  assert.equal(clean.ignoredParams, undefined, 'a link whose every parameter was used reports nothing');
+});
+
+test('REALITY key fields on a non-REALITY link are reported, because nothing uses them there', () => {
+  const node = parseSubscription(
+    'vless://11111111-2222-3333-4444-555555555555@203.0.113.7:443?security=tls&sni=a.example&pbk=K&sid=ab#T',
+  ).nodes[0]!;
+  assert.deepEqual(node.ignoredParams, ['pbk', 'sid']);
+});
+
 /* ── a draft nothing can store is the defect this file was rewritten to remove ───────────── */
 
 test('a parsed draft is checked against the catalogue entry that will have to store it', () => {

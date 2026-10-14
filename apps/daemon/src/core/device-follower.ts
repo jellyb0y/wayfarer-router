@@ -20,7 +20,7 @@ import type { ProfileDocument } from '@wayfarer/schemas';
 import type { Platform } from '../platform/index.ts';
 import type { ProfileStore } from '../state/profiles.ts';
 import type { Store } from '../state/store.ts';
-import { applyDocument, type ApplyDeps } from './apply.ts';
+import { applyDocument, applyInFlight, type ApplyDeps } from './apply.ts';
 import { PATHS } from './desired-state.ts';
 import { followedNetworkDivergence } from './followed-networks.ts';
 import type { ObserverRegistry } from './observers.ts';
@@ -76,6 +76,7 @@ export function followDevice(input: {
         openedBy: null,
       }),
     openTransaction: () => {
+      if (applyInFlight(profiles)) return { id: profiles.recentTransactions(1)[0]?.id ?? 'unknown', state: 'applying' };
       const open = profiles
         .recentTransactions(10)
         .find((row) => row.state === 'applying' || row.state === 'awaiting-confirm' || row.state === 'reverting');

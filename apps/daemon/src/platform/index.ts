@@ -25,6 +25,11 @@ import {
   restoreAside,
   writeAtomic,
 } from './files.ts';
+import { resolveWith } from './dns.ts';
+import { spawnScoped } from './exec.ts';
+import { freeLoopbackPort } from './ports.ts';
+import { createScratch } from './scratch.ts';
+import * as installTree from './install-tree.ts';
 import { fetchText } from './http.ts';
 import { createJournalReader, type JournalReader } from './journal-reader.ts';
 import { createNetReader, type NetReader } from './net.ts';
@@ -85,6 +90,15 @@ export interface Platform {
   journal: JournalReader;
   /** Requests that leave the device. See `http.ts` for why its failures never carry the URL. */
   http: { fetchText: typeof fetchText };
+  /** One name from one named resolver. See `dns.ts`. */
+  dns: { resolveWith: typeof resolveWith };
+  /**
+   * Processes that live for one request — a tunnel test's clients — with a private directory and a free
+   * loopback port for them. See `exec.ts`, `scratch.ts` and `ports.ts`.
+   */
+  scoped: { spawn: typeof spawnScoped; scratch: typeof createScratch; freePort: typeof freeLoopbackPort };
+  /** The installed bundle on disk, for an update. See `install-tree.ts`. */
+  install: typeof installTree;
   close(): void;
 }
 
@@ -144,6 +158,9 @@ export function createPlatform(options: PlatformOptions): Platform {
     }),
     journal: createJournalReader(paths.journalctl),
     http: { fetchText },
+    dns: { resolveWith },
+    scoped: { spawn: spawnScoped, scratch: createScratch, freePort: freeLoopbackPort },
+    install: installTree,
     close(): void {
       systemd.close();
       supplicant.close();

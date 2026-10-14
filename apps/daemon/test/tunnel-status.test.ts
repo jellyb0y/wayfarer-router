@@ -250,6 +250,9 @@ function pollingPlatform(calls: ShowCall[], properties: Record<string, Record<st
     binaries: {} as Platform['binaries'],
     journal: { currentBootId: async () => 'boot' } as unknown as Platform['journal'],
     http: { fetchText: async () => ({ ok: false as const, reason: 'no network in this test' }) },
+    dns: { resolveWith: async () => ({ ok: false, detail: 'no network in this test' }) },
+    scoped: {} as Platform['scoped'],
+    install: {} as Platform['install'],
     close: () => undefined,
   };
 }
@@ -373,6 +376,7 @@ function fakeTelemetry(tunnels: LiveStatus['tunnels']): ServerContext['telemetry
     watchLinks: () => undefined,
     watchTunnels: () => undefined,
     recordLog: () => undefined,
+    publishTransaction: () => undefined,
   };
 }
 

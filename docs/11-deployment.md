@@ -215,38 +215,62 @@ honouring it, and points at them when it does.
 
 ## Updates
 
+Two ways in, one installer:
+
 ```sh
-way update --from <path>
+way update --from <bundle>        # on the device, as before
+POST /api/system/update           # from the panel (Settings → Software) or a script, with the bundle as the body
+way update --rollback             # or POST /api/system/update/rollback: back to the bundle the last update kept
 ```
 
-1. Verify the new bundle.
-2. Keep the current bundle as a rollback copy — and **never overwrite an existing one**, because its
-   presence means an earlier update never finished, so the bundle in place is the one that failed.
-3. Stop the daemon.
-4. Replace the bundle and the static files; run database migrations.
-5. Start the daemon; it re-applies the active profile, which is idempotent.
-6. If the daemon does not answer, restore the rollback copy and leave the unit **disabled**, so the
-   device boots without it rather than into software never seen to work.
+**Implemented 2026-10-14** (it was specified here and listed as C15 before that; `way update` did not exist).
+`core/update.ts` does what this section always said:
 
-### A path, never a URL — and this is a decision, not an omission
+1. **Verify the bundle** (`core/update-bundle.ts`): an Ed25519 signature over its manifest, checked against
+   the public key installed on the device, then every file against the manifest's SHA-256, every path inside
+   what an update may replace (`daemon.cjs`, `way.cjs`, `build.json`, `bin/`, `ui/`). Anything else refuses
+   the whole bundle, by name.
+2. **Keep the current bundle** as `updates/previous` in the state directory — and **never overwrite it when
+   the previous update never finished** (`updates/state.json` still says `installing`), because then the
+   bundle in place is the one that failed.
+3. **Stop the daemon, replace the files, start it.** Each file is written beside its name and renamed over
+   it, and `ui/` is swapped whole, so a power cut leaves the old file or the new one, never half.
+4. **Ask the daemon**, `GET /api/health`, for up to 30 s — not systemd: a process that started and cannot
+   serve is `active`.
+5. **No answer: the kept bundle goes back** and is asked the same question. `state.json` and the event ring
+   say which runs: `system.update-installed`, `system.update-rolled-back` or `system.update-failed`.
 
-`--from` takes a local path only. There is no `--from https://…`, there will not be one, and the
-reason is worth stating plainly rather than leaving as a gap somebody helpfully fills later:
+The API route verifies and stages, then starts `way update --staged` as a transient unit of its own
+(`systemd.runOnce`) and answers `202` — the installer must outlive the daemon it stops. It refuses while an
+apply runs or a window is open: the new daemon's start-up sweep would revert somebody's pending change.
+
+### Building and signing a bundle
+
+```sh
+node --experimental-strip-types scripts/bundle.ts keygen ~/.config/wayfarer      # once; never inside this repository
+pnpm run build
+WAYFARER_SIGNING_KEY=~/.config/wayfarer/wayfarer-signing.key \
+  node --experimental-strip-types scripts/bundle.ts build                         # → apps/daemon/dist/wayfarer-<version>.bundle
+```
+
+The public key goes on each device once: `deploy/install.sh --update-key wayfarer-signing.pub`, or
+`WAYFARER_UPDATE_KEY=… ./scripts/deploy.sh`. Without it the device refuses every bundle through the API
+(`409 update_key_missing`). The version is `<package version>+<git describe>`, with `-dirty` for a tree with
+uncommitted changes, so `GET /api/system` says which source runs.
+
+### A path or an upload, never a URL — and this is a decision, not an omission
+
+The daemon does not download its own replacement, and the reason stands as it was written:
 
 > **A daemon that downloads and executes its own replacement is a remote-code-execution feature with a
 > friendly name.**
 
-Everything that would have to be right for it to be safe — certificate validation, a pinned signing
-key, a signature check before execution, a trustworthy clock to judge the certificate by, and a
-rollback if the downloaded thing is hostile rather than merely broken — is a larger and more delicate
-mechanism than the update itself, on a device that by design has no operator present. And the clock is
-the part that cannot be assumed: this board has no battery-backed clock, so on first boot it cannot
-validate a certificate at all.
-
-Copying a file to the device is one command the operator already knows and already trusts, and it puts
-the decision about *what* this device runs where it belongs: with the person, before the transfer,
-rather than with the daemon, after it.
-5. On failure, restore the previous bundle and start it again.
+What changed on 2026-10-14 is that a person may hand the device a file over the API instead of over ssh,
+and that is a different thing. The device still never chooses *what* it runs: the person builds the bundle,
+signs it with a key that never leaves their machine, and uploads it. The signature — not the session that
+uploaded it — is what makes the device trust it, so an admin session alone cannot install arbitrary code,
+and no clock is involved: this board has no battery-backed clock, which is why a certificate-based scheme
+was refused and an Ed25519 key, which needs none, was chosen.
 
 Configuration is never migrated destructively: profile documents carry their own
 `schemaVersion` and migrations are pure functions, so an old export still imports

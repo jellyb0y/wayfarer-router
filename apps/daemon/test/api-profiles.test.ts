@@ -29,7 +29,7 @@ import type { Platform } from '../src/platform/index.ts';
 import { builtInAndDongle, cleanFacts } from './helpers/synthetic-inventory.ts';
 import { resolveBranch } from '@wayfarer/protocols/resolver';
 import { resolveRef } from '@wayfarer/protocols/json';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { allPolicyRules } from './helpers/policy-rules.ts';
@@ -53,7 +53,7 @@ interface ArmedTransient {
   argv: string[];
 }
 
-function fakePlatform(options: { transientFails?: boolean; unwritable?: string[] } = {}): {
+function fakePlatform(options: { transientFails?: boolean; unwritable?: string[]; slowWritesMs?: number } = {}): {
   platform: Platform;
   armed: () => ArmedTransient[];
   stopped: () => string[];
@@ -181,6 +181,8 @@ function fakePlatform(options: { transientFails?: boolean; unwritable?: string[]
     nft: { check: async () => ({ ok: true, message: '' }) } as unknown as Platform['nft'],
     files: {
       writeAtomic: async (path: string) => {
+        // An apply that takes a while, as one that restarts the core does on the board.
+        if (options.slowWritesMs !== undefined) await new Promise((resolve) => setTimeout(resolve, options.slowWritesMs));
         trace.push(`write:${path}`);
         return { path, bytes: 1, changed: true };
       },
@@ -273,6 +275,7 @@ function fakeTelemetry(): ServerContext['telemetry'] {
     watchLinks: () => undefined,
     watchTunnels: () => undefined,
     recordLog: () => undefined,
+    publishTransaction: () => undefined,
   };
 }
 
@@ -298,7 +301,12 @@ interface Harness {
 /** A device with the machinery wired, standing in for a real one. */
 async function device(
   label: string,
-  options: { transientFails?: boolean; unwritable?: string[]; transactionEnded?: ApplyDeps['transactionEnded'] } = {},
+  options: {
+    transientFails?: boolean;
+    unwritable?: string[];
+    slowWritesMs?: number;
+    transactionEnded?: ApplyDeps['transactionEnded'];
+  } = {},
 ): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), `wayfarer-${label}-`));
   const database = openDatabase({ path: join(directory, 'state.db') });
@@ -405,7 +413,10 @@ async function device(
     app,
     store,
     database,
-    close: () => database.close(),
+    close: () => {
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    },
     headers: { authorization: `Bearer ${token}` },
     armed,
     stopped,
@@ -2436,4 +2447,111 @@ test('each of the three readings is reported on its own, and a redaction marker 
       ['/tunnels/1/config/api_token', 'named like a secret, and not marked as one'],
     ],
   );
+});
+
+/* ── an apply that answers before it ends, and the actions built on it ───────────────────── */
+
+/**
+ * Measured on the bench board, 2026-10-11: a network apply outlived the client's 120 s HTTP timeout, and
+ * its window was confirmed with 33 s left because the client had no id to confirm until it went looking.
+ * An apply now answers `202` with the transaction once it is clearly not finishing at once.
+ */
+test('a slow apply answers 202 with its transaction, refuses a second one, and leaves its outcome on the row', async (t) => {
+  const { app, store, close, headers } = await device('apply-async', { slowWritesMs: 300 });
+  t.after(() => {
+    void app.close();
+    close();
+  });
+  const id = (await app.inject({ method: 'POST', url: '/api/profiles', headers, payload: { name: 'A' } })).json<{ id: string }>().id;
+  store.setActiveProfileId(id);
+
+  const started = Date.now();
+  const applied = await app.inject({ method: 'POST', url: '/api/apply', headers, payload: {} });
+  assert.equal(applied.statusCode, 202, applied.body);
+  assert.ok(Date.now() - started < 3_000, 'a 202 that arrives after the apply has finished is not an answer');
+  const transaction = applied.json<{ transaction: { id: string; state: string } }>().transaction;
+  assert.equal(transaction.state, 'applying');
+
+  const second = await app.inject({ method: 'POST', url: '/api/apply', headers, payload: {} });
+  assert.equal(second.statusCode, 409, second.body);
+  assert.equal(second.json<{ error: { code: string } }>().error.code, 'apply_in_progress');
+
+  let row: { state: string; outcome: { ok: boolean; steps?: unknown[] } | null } | null = null;
+  for (let i = 0; i < 200; i += 1) {
+    row = (await app.inject({ method: 'GET', url: `/api/transactions/${transaction.id}`, headers })).json();
+    if (row!.outcome !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(row?.outcome?.ok, true, JSON.stringify(row));
+  assert.ok(Array.isArray(row?.outcome?.steps) && row.outcome.steps.length > 0, 'the steps must be readable after a 202');
+});
+
+test('?wait=1 holds the request until the apply ends, as every apply did before', async (t) => {
+  const { app, store, close, headers } = await device('apply-wait', { slowWritesMs: 300 });
+  t.after(() => {
+    void app.close();
+    close();
+  });
+  const id = (await app.inject({ method: 'POST', url: '/api/profiles', headers, payload: { name: 'W' } })).json<{ id: string }>().id;
+  store.setActiveProfileId(id);
+  const applied = await app.inject({ method: 'POST', url: '/api/apply?wait=1', headers, payload: {} });
+  assert.equal(applied.statusCode, 200, applied.body);
+  assert.ok(applied.json<{ steps: unknown[] }>().steps.length > 0);
+});
+
+test('activate with apply=1 selects and applies in one request', async (t) => {
+  const { app, store, close, headers } = await device('activate-apply');
+  t.after(() => {
+    void app.close();
+    close();
+  });
+  const first = (await app.inject({ method: 'POST', url: '/api/profiles', headers, payload: { name: 'One' } })).json<{ id: string }>().id;
+  const second = (await app.inject({ method: 'POST', url: '/api/profiles', headers, payload: { name: 'Two' } })).json<{ id: string }>().id;
+  store.setActiveProfileId(first);
+
+  const activated = await app.inject({ method: 'POST', url: `/api/profiles/${second}/activate?apply=1&wait=1`, headers, payload: {} });
+  assert.equal(activated.statusCode, 200, activated.body);
+  assert.equal(store.device().activeProfileId, second);
+  const id = activated.json<{ transaction: { id: string } }>().transaction.id;
+  const row = (await app.inject({ method: 'GET', url: `/api/transactions/${id}`, headers })).json<{ activeProfileBefore: string | null }>();
+  // Recorded, so a revert of this transaction can put the selection back.
+  assert.equal(row.activeProfileBefore, first);
+});
+
+test('a clone copies the stored secrets without returning them, and is a separate, inactive profile', async (t) => {
+  const { app, store, close, headers } = await device('clone');
+  t.after(() => {
+    void app.close();
+    close();
+  });
+  const id = (await app.inject({ method: 'POST', url: '/api/profiles', headers, payload: { name: 'Source' } })).json<{ id: string }>().id;
+  const current = (await app.inject({ method: 'GET', url: `/api/profiles/${id}`, headers })).json<{ document: Record<string, unknown> }>().document;
+  await app.inject({
+    method: 'PUT',
+    url: `/api/profiles/${id}`,
+    headers,
+    payload: {
+      ...current,
+      accessPoint: {
+        bind: { by: 'phy-builtin' },
+        radio: { band: '5GHz', channel: 36, width: 80, country: 'US', hidden: false },
+        ssid: 'Wayfarer',
+        passphrase: 'kept-inside-the-store',
+        acceptChannelFollowsUplink: false,
+      },
+    },
+  });
+  store.setActiveProfileId(id);
+
+  const cloned = await app.inject({ method: 'POST', url: `/api/profiles/${id}/clone`, headers, payload: { name: 'Copy' } });
+  assert.equal(cloned.statusCode, 201, cloned.body);
+  assert.doesNotMatch(cloned.body, /kept-inside-the-store/);
+  const copyId = cloned.json<{ id: string }>().id;
+  assert.notEqual(copyId, id);
+  assert.equal(store.device().activeProfileId, id, 'a clone must not change the selection');
+
+  const exported = await app.inject({ method: 'GET', url: `/api/profiles/${copyId}/export?secrets=include`, headers });
+  assert.match(exported.body, /kept-inside-the-store/, 'the copy must carry the secret, or it is not a copy');
+  const read = (await app.inject({ method: 'GET', url: `/api/profiles/${copyId}`, headers })).json<{ document: { meta: { name: string } }; missingSecrets: unknown[] }>();
+  assert.equal(read.document.meta.name, 'Copy');
 });

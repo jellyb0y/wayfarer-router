@@ -12,7 +12,7 @@ import type { ReactElement } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, subscribeToEvents, type StatusResponse } from './lib/api.ts';
+import { api, subscribeToEvents, transactionChanged, type StatusResponse } from './lib/api.ts';
 import { t } from './lib/i18n.ts';
 import { useProfileTarget } from './lib/target.ts';
 import { EditingElsewhere } from './components/EditingElsewhere.tsx';
@@ -23,6 +23,7 @@ import { Network } from './pages/Network.tsx';
 import { Routing } from './pages/Routing.tsx';
 import { Tunnels } from './pages/Tunnels.tsx';
 import { Events } from './pages/Events.tsx';
+import { Diagnostics } from './pages/Diagnostics.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { PoweredOff, usePowerOff } from './components/PowerOff.tsx';
 
@@ -68,6 +69,10 @@ export function App(): ReactElement {
       if (event === 'unit' || event === 'station') {
         void queryClient.invalidateQueries({ queryKey: ['status'] });
       }
+      if (event === 'transaction') {
+        transactionChanged();
+        void queryClient.invalidateQueries({ queryKey: ['transaction'] });
+      }
     });
   }, [gate, off, queryClient]);
 
@@ -95,7 +100,8 @@ export function Shell({ live }: { live: StatusResponse | null }): ReactElement {
         <span className="brand">{t('app.title')}</span>
         <nav className="tabs">
           {/*
-            * Seven entries, which is the whole set: the bar went from eight to six when Profiles,
+            * Eight entries since 2026-10-14, when Diagnostics arrived with the routes behind it (the
+            * readings that took a shell on 2026-10-11). Before that, seven: the bar went from eight to six when Profiles,
             * Devices and Password each got a place on Settings, and Tunnels is the seventh, arriving
             * with the editor rather than before it.
             *
@@ -110,6 +116,7 @@ export function Shell({ live }: { live: StatusResponse | null }): ReactElement {
           <NavLink to="/network" className={({ isActive }) => (isActive ? 'active' : '')}>{t('nav.network')}</NavLink>
           <NavLink to="/clients" className={({ isActive }) => (isActive ? 'active' : '')}>{t('nav.clients')}</NavLink>
           <NavLink to="/events" className={({ isActive }) => (isActive ? 'active' : '')}>{t('nav.events')}</NavLink>
+          <NavLink to="/diagnostics" className={({ isActive }) => (isActive ? 'active' : '')}>{t('nav.diagnostics')}</NavLink>
           <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>{t('nav.settings')}</NavLink>
         </nav>
         <span className="spacer" />
@@ -147,6 +154,7 @@ export function Shell({ live }: { live: StatusResponse | null }): ReactElement {
         <Route path="/routing" element={<Routing />} />
         <Route path="/network" element={<Network live={live} />} />
         <Route path="/events" element={<Events />} />
+        <Route path="/diagnostics" element={<Diagnostics />} />
         <Route path="/settings" element={<Settings live={live} />} />
         <Route path="*" element={<Navigate to="/status" replace />} />
       </Routes>

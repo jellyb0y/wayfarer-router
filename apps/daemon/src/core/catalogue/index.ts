@@ -94,7 +94,15 @@ export interface EntryPlanContext {
    * made it.
    */
   allocatePort(claim: { owner: string; pointer: string }): number;
+  /**
+   * How much an external client logs. `warning` unless a person raised it for a while
+   * (`POST /api/debug/log-level` with `target: "carriers"`): measured on the bench board, 2026-10-11, the
+   * reason a VLESS handshake failed was logged only below `warning`, and reading it took a shell.
+   */
+  carrierLogLevel?: CarrierLogLevel;
 }
+
+export type CarrierLogLevel = 'debug' | 'info' | 'warning';
 
 /* ── what an entry produces ──────────────────────────────────────────────────────────────── */
 

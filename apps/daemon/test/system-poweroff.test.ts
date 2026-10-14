@@ -88,6 +88,9 @@ function fakePlatform(calls: Calls): Platform {
       currentBootId: async () => 'boot-7f3a',
     },
     http: { fetchText: async () => ({ ok: false as const, reason: 'no network in this test' }) },
+    dns: { resolveWith: async () => ({ ok: false, detail: 'no network in this test' }) },
+    scoped: {} as Platform['scoped'],
+    install: {} as Platform['install'],
     close: () => undefined,
   };
 }
@@ -113,6 +116,7 @@ function fakeTelemetry(): ServerContext['telemetry'] {
     watchLinks: () => undefined,
     watchTunnels: () => undefined,
     recordLog: () => undefined,
+    publishTransaction: () => undefined,
   };
 }
 

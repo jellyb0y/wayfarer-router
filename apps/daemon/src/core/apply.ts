@@ -29,8 +29,10 @@ import { planDocument, type PipelineContext } from './pipeline.ts';
 import type { DriftMonitor } from './drift.ts';
 import { reconcile, type ApplyClass, type ReconcileResult } from './reconciler.ts';
 import { containsClass, highest, type BlastRadius, type Plan2 } from './differ.ts';
-import { SAFE_MODE_THRESHOLD, buildSafeModeDocument, isSafeModeOf, safeModeDecision } from './safe-mode.ts';
+import { REVERT_REASONS, SAFE_MODE_THRESHOLD, buildSafeModeDocument, isSafeModeOf, safeModeDecision } from './safe-mode.ts';
 import { windowScopeOf, type WindowFinding, type WindowWatchController } from './window-watch.ts';
+import { checkDataPlane, watchDataPlane, type DataPlaneDeps, type DataPlaneTarget, type DataPlaneWatch } from './data-plane.ts';
+import { parseCidr } from './invariants.ts';
 import {
   CONFIRMATION_WINDOW_MS,
   REVERT_ALLOWANCE_MS,
@@ -89,6 +91,44 @@ export interface ApplyDeps {
    * failed to resolve for about 80 s after a confirm. See `core/transaction-ended.ts`.
    */
   transactionEnded?: (event: { transaction: string; how: 'confirmed' | 'reverted' | 'revert-failed' }) => void | Promise<void>;
+  /**
+   * The window's traffic check (`core/data-plane.ts`). Optional for the reason `windowWatch` is: a caller
+   * that never opens a window needs none, and without it a window works as before, ended by the timer or
+   * a person. With it, a change that stops client traffic which worked before it is reverted early.
+   */
+  dataPlane?: DataPlaneDeps & {
+    /** Whether the core is running now, before the change: which path the baseline measures. */
+    coreRunning(): Promise<boolean>;
+  };
+}
+
+/* ── one apply at a time ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * The applies running in this process, per profile store.
+ *
+ * In memory, and that is the authority: the row's state cannot be, because a network apply moves its row
+ * to `awaiting-confirm` **before** the reconcile (the window is opened first, see below), so a reader
+ * looking for `applying` misses exactly the dangerous one. Measured in this code, 2026-10-14: the tunnel
+ * restart route and the rules watch both looked for `applying` and would have run during a network
+ * reconcile. A WeakSet keyed by the store so separate test benches do not see each other.
+ */
+const inFlight = new WeakSet<ProfileStore>();
+
+/**
+ * Whether an apply is under way: one running in this process, or a row another process left `applying`.
+ * Every caller that restarts units or edits the active profile asks this rather than reading rows itself.
+ */
+export function applyInFlight(profiles: ProfileStore): boolean {
+  return inFlight.has(profiles) || profiles.recentTransactions(5).some((row) => row.state === 'applying');
+}
+
+/** Running traffic checks by transaction, so a confirm or a revert can stop the one for its window. */
+const dataPlaneWatches = new Map<string, DataPlaneWatch>();
+
+function stopDataPlane(id: string): void {
+  dataPlaneWatches.get(id)?.stop();
+  dataPlaneWatches.delete(id);
 }
 
 /**
@@ -180,8 +220,39 @@ type ApplyInput = Parameters<typeof applyDocumentOnce>[1];
  * refused before a transaction existed changed nothing, and is not followed by a check.
  */
 export async function applyDocument(deps: ApplyDeps, input: ApplyInput): Promise<ApplyOutcome> {
-  const outcome = await applyDocumentOnce(deps, input);
-  if (outcome.transaction !== undefined) await deps.drift.run('after-apply');
+  /*
+   * One at a time. Two applies planning against the same device each compute a diff from files the other
+   * is rewriting, and the second's revert target is the first's half-finished state. Before 2026-10-14
+   * nothing stopped it: the route blocked for the whole apply, so a second request simply queued behind
+   * the first in the person's own browser. An apply that answers `202` removes that accident.
+   */
+  if (inFlight.has(deps.profiles)) {
+    return {
+      ok: false,
+      error: {
+        status: 409,
+        code: 'apply_in_progress',
+        message: 'Another apply is under way on this device. Nothing was done.',
+        hint: 'Follow it in GET /api/transactions or the event stream, then try again.',
+      },
+    };
+  }
+  inFlight.add(deps.profiles);
+  let outcome: ApplyOutcome;
+  try {
+    outcome = await applyDocumentOnce(deps, input);
+  } finally {
+    inFlight.delete(deps.profiles);
+  }
+  if (outcome.transaction !== undefined) {
+    // On the row, because the caller that asked may have been answered `202` long ago.
+    deps.profiles.recordOutcome(outcome.transaction.id, {
+      ok: outcome.ok,
+      ...(outcome.result === undefined ? {} : { steps: outcome.result.steps, refused: outcome.result.refused }),
+      ...(outcome.error === undefined ? {} : { error: outcome.error }),
+    });
+    await deps.drift.run('after-apply');
+  }
   return outcome;
 }
 
@@ -197,6 +268,13 @@ async function applyDocumentOnce(
      * confirm a change only they can confirm. Absent for work the device starts itself.
      */
     openedBy?: string | null;
+    /**
+     * Told the moment the transaction exists and is `applying`, before anything is changed. A route uses
+     * it to answer `202` with the id instead of holding the request for the whole apply.
+     */
+    onStarted?: (transaction: { id: string; blastRadius: BlastRadius }) => void;
+    /** For an activate-and-apply: the profile active before, put back if this transaction is reverted. */
+    activeProfileBefore?: string | null;
   },
 ): Promise<ApplyOutcome> {
   const now = deps.now ?? ((): Date => new Date());
@@ -311,6 +389,7 @@ async function applyDocumentOnce(
     kind: 'apply',
     blastRadius: performedRadius,
     plan: { humanDiff: classified.humanDiff, blastRadius: classified.blastRadius },
+    ...(input.activeProfileBefore === undefined ? {} : { activeProfileBefore: input.activeProfileBefore }),
   });
 
   deps.profiles.setTransactionState(transaction.id, 'applying');
@@ -320,6 +399,22 @@ async function applyDocumentOnce(
     summary: `apply started (${performedRadius})`,
     detail: { transaction: transaction.id, classes },
   });
+  input.onStarted?.({ id: transaction.id, blastRadius: performedRadius });
+
+  /*
+   * The traffic check's target and its baseline, taken **before** anything changes: the baseline is the
+   * only thing that can say a failure afterwards was caused by this change. See `core/data-plane.ts`.
+   */
+  const dataPlaneTarget = needsWindow && deps.dataPlane !== undefined ? dataPlaneTargetOf(input.document, plan.desired.units) : null;
+  let dataPlaneBaseline: boolean | null = null;
+  if (dataPlaneTarget !== null && deps.dataPlane !== undefined) {
+    const coreBefore = await deps.dataPlane.coreRunning().catch(() => null);
+    if (coreBefore !== null) {
+      const baseline = await checkDataPlane(deps.dataPlane, { ...dataPlaneTarget, viaCore: coreBefore }).catch(() => null);
+      dataPlaneBaseline = baseline === null ? null : baseline.ok;
+      deps.log('info', { transaction: transaction.id, baseline }, 'traffic checked before the change');
+    }
+  }
 
   /**
    * Validate before arming, and arm before changing anything.
@@ -532,6 +627,32 @@ async function applyDocumentOnce(
       .map((change) => change.name),
   });
 
+  if (dataPlaneTarget !== null && deps.dataPlane !== undefined) {
+    const id = transaction.id;
+    const watch = watchDataPlane({
+      deps: deps.dataPlane,
+      target: dataPlaneTarget,
+      baselinePassed: dataPlaneBaseline,
+      record: (reading) => deps.profiles.recordDataPlane(id, reading),
+      revert: async (reason) => {
+        dataPlaneWatches.delete(id);
+        // Only a window still open: a person may have confirmed or reverted it while the check ran.
+        if (deps.profiles.transaction(id)?.state !== 'awaiting-confirm') return;
+        deps.store.recordEvent({
+          level: 'error',
+          kind: 'apply.data-plane-failed',
+          summary: `transaction ${id}: ${reason}; reverting now rather than at the deadline`,
+          detail: { transaction: id },
+        });
+        await revertTransaction(deps, id, `${REVERT_REASONS.dataPlaneFailed}: ${reason}`);
+      },
+    });
+    dataPlaneWatches.set(id, watch);
+    void watch.done.finally(() => {
+      if (dataPlaneWatches.get(id) === watch) dataPlaneWatches.delete(id);
+    });
+  }
+
   deps.store.recordEvent({
     level: 'info',
     kind: 'apply.awaiting-confirm',
@@ -672,6 +793,7 @@ export async function confirmTransaction(deps: ApplyDeps, id: string): Promise<A
   // still armed, which reverts a change the operator was told had been kept.
   await stopRevertTimer(deps, row);
   deps.windowWatch?.stop(id);
+  stopDataPlane(id);
   deps.profiles.confirmTransaction(id);
   deps.store.recordEvent({ level: 'info', kind: 'apply.confirmed', summary: `transaction ${id} confirmed`, detail: { transaction: id } });
   // The window's change is now the device's state; the report must say what that state is.
@@ -799,6 +921,7 @@ export async function revertTransaction(deps: ApplyDeps, id: string, reason: str
   await stopRevertTimer(deps, row);
   // And the health checks: a finding recorded mid-revert would describe a window that has shut.
   deps.windowWatch?.stop(id);
+  stopDataPlane(id);
 
   /**
    * Put back any file that was moved aside, before re-applying.
@@ -946,6 +1069,23 @@ export async function revertTransaction(deps: ApplyDeps, id: string, reason: str
   }
 
   deps.profiles.finishRevert(id);
+
+  /*
+   * An activate-and-apply also puts the selection back. This is not the pointer note below, which is about
+   * an ordinary apply: there, moving the pointer would discard a person's edit. Here the pointer was moved
+   * by this very transaction, both profiles are still stored unchanged, and leaving it would make the
+   * device run one profile while naming the other as active — the next apply would install the one that
+   * was just reverted.
+   */
+  if (row.activeProfileBefore !== null && deps.profiles.get(row.activeProfileBefore) !== null) {
+    deps.store.setActiveProfileId(row.activeProfileBefore);
+    deps.store.recordEvent({
+      level: 'info',
+      kind: 'profile.activation-reverted',
+      summary: `the profile active before transaction ${id} is active again`,
+      detail: { transaction: id, activeProfileId: row.activeProfileBefore },
+    });
+  }
 
   /**
    * What this device is running now, compared with what is stored — asked here because this is the
@@ -1356,6 +1496,23 @@ export async function maybeEnterSafeMode(deps: ApplyDeps, profileId: string): Pr
  * anything short of the card failing.
  */
 export async function sweepUnconfirmed(deps: ApplyDeps): Promise<RevertOutcome | null> {
+  /*
+   * A row still `applying` at start-up belongs to a process that is gone: no apply survives its daemon.
+   * Such a row never had a window (a network apply opens its window before it changes anything, so its row
+   * is `awaiting-confirm`, handled below), and it is marked failed so `applyInFlight` does not read it as an
+   * apply in progress forever.
+   */
+  for (const row of deps.profiles.recentTransactions(20)) {
+    if (row.state !== 'applying') continue;
+    deps.profiles.setTransactionState(row.id, 'failed', REVERT_REASONS.interrupted);
+    deps.store.recordEvent({
+      level: 'warn',
+      kind: 'apply.interrupted',
+      summary: `transaction ${row.id} was still applying when the daemon stopped; marked failed`,
+      detail: { transaction: row.id },
+    });
+  }
+
   const open = deps.profiles.unconfirmedTransaction();
   if (open === null) return null;
 
@@ -1510,4 +1667,17 @@ function realCountry(radio: Inventory['radios'][number], inventory: Inventory): 
     if (country !== null && country !== '00') return country;
   }
   return null;
+}
+
+/**
+ * Which path a client's traffic takes under this plan: the resolver DHCP hands out (the device's LAN
+ * address, `core/generate/dhcp.ts`), and whether unmatched traffic leaves through the core.
+ */
+function dataPlaneTargetOf(document: ProfileDocument, units: { name: string; active: boolean }[]): DataPlaneTarget {
+  const lan = document.accessPoint === null ? null : parseCidr(document.network.cidr);
+  return {
+    resolver: lan === null ? null : lan.address,
+    endpoints: document.policy.probes.endpoints,
+    viaCore: units.some((unit) => unit.name === 'wf-core.service' && unit.active),
+  };
 }

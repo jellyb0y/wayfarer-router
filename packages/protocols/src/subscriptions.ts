@@ -88,6 +88,15 @@ export type ParsedNode = {
    * a provider's label is arbitrary text and an id has to satisfy the identifier rules.
    */
   label: string | null;
+  /**
+   * Query parameters the link carried and nothing read, sorted. Absent when there were none.
+   *
+   * A parameter dropped without a word is how a node ends up configured without something its server
+   * requires: on 2026-10-11 `headerType=http` was discarded here and every connection was reset. The
+   * draft is still returned — refusing a node over a parameter that may be decoration would be worse —
+   * but the caller can now say what was left behind instead of handing over a tunnel that looks complete.
+   */
+  ignoredParams?: string[];
 } & TunnelDraft;
 
 export interface SubscriptionParser {
@@ -382,6 +391,7 @@ const vless: SubscriptionParser = {
   test: (line) => /^vless:\/\//i.test(line),
   parse(line) {
     const url = asUrl(line, 'vless');
+    const read = recordReads(url);
     const account = decodeURIComponent(url.username);
     if (account === '') throw new Error('a vless link must carry a UUID before the @');
 
@@ -426,9 +436,35 @@ const vless: SubscriptionParser = {
     // The one cast in this file, and it is backed rather than asserted: `parseSubscription` validates
     // every draft against this same schema before a caller sees it, and reports a failure when it does
     // not hold. A cast with a runtime check behind it is a different thing from a cast instead of one.
-    return { scheme: 'vless', label: labelOf(url), protocol: 'vless', config: config as VlessConfig };
+    const node: ParsedNode = { scheme: 'vless', label: labelOf(url), protocol: 'vless', config: config as VlessConfig };
+    const ignored = [...new Set(url.searchParams.keys())].filter((name) => !read.has(name)).sort();
+    if (ignored.length > 0) node.ignoredParams = ignored;
+    return node;
   },
 };
+
+/**
+ * Records every query parameter the parser asks for.
+ *
+ * "Ignored" is defined as *nothing read it*, rather than as absence from a list of known names kept
+ * beside the parser: a list drifts from the code the moment someone adds a field and forgets the list,
+ * and the drift is silent in exactly the direction this exists to catch. A parameter read and then
+ * deliberately dropped (`headerType=none`, `encryption=none`) counts as understood. `pbk`/`sid` are read
+ * only for REALITY, so on any other link they are reported, which is true: nothing uses them there.
+ *
+ * `URL#searchParams` returns the same object on every access, so wrapping its `get` covers every reader
+ * in this file, including the helpers that take the `URL`.
+ */
+function recordReads(url: URL): Set<string> {
+  const read = new Set<string>();
+  const params = url.searchParams;
+  const get = params.get.bind(params);
+  params.get = (name: string): string | null => {
+    read.add(name);
+    return get(name);
+  };
+  return read;
+}
 
 /** Sets a field when the link actually carried it. An absent field is not an empty one. */
 function put(config: Record<string, unknown>, key: string, value: string | null): void {

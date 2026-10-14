@@ -25,6 +25,8 @@ import { createSecretPlan } from './state/secret-plan.ts';
 import { collectFacts, collectReality } from './platform/facts.ts';
 import type { PipelineContext } from './core/pipeline.ts';
 import { buildRecoveryDocument, revertTransaction, type ApplyDeps } from './core/apply.ts';
+import { installBundle, stageBundle } from './core/update.ts';
+import { verifyBundle } from './core/update-bundle.ts';
 import { checkDrift, createDriftMonitor, operatorDrift, summarise } from './core/drift.ts';
 import { planDocument } from './core/pipeline.ts';
 import { assertNoSelfCapture, decideRederive, probeAddressFor } from './core/boot-guard.ts';
@@ -43,6 +45,9 @@ const USAGE = `way — Wayfarer operator CLI
   way inventory [--json]     the discovered hardware model
   way listen [--json]        the addresses and interfaces the daemon will serve on
   way revert --txn <id>      undo a transaction: what the transient timer runs
+  way update --from <bundle> verify a signed bundle and install it; the previous one comes back if it fails
+  way update --staged        install the bundle POST /api/system/update staged (what its unit runs)
+  way update --rollback      go back to the bundle kept by the last update
   way transactions           recent transactions, newest first
   way rederive               refresh the generated values read off this device (runs at boot)
   way check-routes           no address this device holds may route into the tunnel
@@ -104,6 +109,9 @@ async function main(argv: string[]): Promise<number> {
 
     case 'revert':
       return await revert(config, rest);
+
+    case 'update':
+      return await update(config, rest);
 
     case 'transactions':
       return await transactions(config);
@@ -1140,5 +1148,90 @@ async function transactions(config: Awaited<ReturnType<typeof loadConfig>>['conf
     return 0;
   } finally {
     database.close();
+  }
+}
+
+/**
+ * `way update`: verify, keep what runs, replace, ask the daemon, go back if it does not answer.
+ *
+ * See `core/update.ts`. Run by hand with `--from`, or by the unit `POST /api/system/update` starts with
+ * `--staged`: in both cases outside the daemon, because the daemon is what is replaced.
+ */
+async function update(config: Awaited<ReturnType<typeof loadConfig>>['config'], args: string[]): Promise<number> {
+  const platform = createPlatform({ cacheDir: config.cacheDir, paths: config.paths });
+  const database = openDatabase({ path: `${config.stateDir}/wayfarer.db` });
+  const store = createStore(database);
+  const say = (line: string): void => void process.stdout.write(`way update: ${line}\n`);
+  try {
+    const locations = { installDir: config.installDir, stateDir: config.stateDir };
+    let source: 'staged' | 'previous';
+    if (args.includes('--rollback')) {
+      source = 'previous';
+    } else if (args.includes('--staged')) {
+      source = 'staged';
+    } else {
+      const index = args.indexOf('--from');
+      const path = index >= 0 ? args[index + 1] : undefined;
+      if (path === undefined || path === '') {
+        process.stderr.write('way update --from <bundle> | --staged | --rollback\n');
+        return 2;
+      }
+      const key = await platform.install.readText(config.updateKeyPath);
+      if (key === null) {
+        process.stderr.write(`way update: no signing key at ${config.updateKeyPath}; an unsigned bundle is not installed\n`);
+        return 1;
+      }
+      const bytes = await platform.install.readBytes(path);
+      if (bytes === null) {
+        process.stderr.write(`way update: cannot read ${path}\n`);
+        return 1;
+      }
+      const verdict = verifyBundle(bytes, key);
+      if (!verdict.ok) {
+        process.stderr.write(`way update: refused: ${verdict.reason}\n`);
+        return 1;
+      }
+      await stageBundle({ tree: platform.install }, locations, verdict.bundle);
+      say(`verified and staged ${verdict.bundle.manifest.version}`);
+      source = 'staged';
+    }
+
+    const outcome = await installBundle(
+      {
+        tree: platform.install,
+        stopDaemon: async () => void (await platform.systemd.stop(config.unitName)),
+        startDaemon: async () => {
+          /*
+           * The start-limit counter first. Measured on the bench board, 2026-10-14 03:24 MSK: a bundle whose
+           * daemon exits at once was restarted by `Restart=always` until systemd's limit (5 in 5 min), and
+           * the restart that put the kept bundle back was then refused — "Start request repeated too
+           * quickly" — so the rollback restored the files and left nothing running.
+           */
+          await platform.systemd.resetFailed(config.unitName);
+          await platform.systemd.restart(config.unitName);
+        },
+        answers: async () => {
+          // Thirty seconds: start-up opens the database, runs migrations and plans once before it binds.
+          for (let attempt = 0; attempt < 30; attempt += 1) {
+            const answered = await fetch(`http://127.0.0.1:${String(config.listen.port)}/api/health`, { signal: AbortSignal.timeout(2000) })
+              .then((response) => response.ok)
+              .catch(() => false);
+            if (answered) return true;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+          return false;
+        },
+        record: (event) => {
+          store.recordEvent(event);
+          say(event.summary);
+        },
+      },
+      { ...locations, source },
+    );
+    say(outcome.message);
+    return outcome.ok ? 0 : 1;
+  } finally {
+    database.close();
+    platform.close();
   }
 }

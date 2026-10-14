@@ -242,6 +242,18 @@ export function extremeSystem(): Record<string, unknown> {
     deviceName: LONGEST_NAME,
     version: '0.9.0-rc.4+build.20260921.1330',
     buildAt: new Date().toISOString(),
+    // The widest Software card: a key, a kept copy, and an update that went back.
+    update: {
+      keyInstalled: true,
+      rollbackAvailable: true,
+      last: {
+        phase: 'rolled-back',
+        from: '0.9.0-rc.3+a1b2c3d4e5-dirty',
+        to: '0.9.0-rc.4+build.20260921.1330',
+        at: '2026-10-14T03:04:05.000Z',
+        detail: '0.9.0-rc.4+build.20260921.1330 did not answer',
+      },
+    },
     runtime: 'node v24.8.0 (single-file bundle, type stripping)',
     startedAt: new Date().toISOString(),
     uptimeSeconds: 987654,
@@ -1220,3 +1232,34 @@ export function extremeTokens(): Record<string, unknown>[] {
  */
 export const EXTREME_POWER_OFF_FAILURE =
   'Switching the device off needs an explicit confirmation in the request body. Nothing was done.';
+
+/**
+ * `GET /api/diagnostics/routing` at its widest: the state of the bench board on 2026-10-11 21:15 (every
+ * own-traffic rule missing, a tunnel server routed through the tunnel, a selector on `block`) with the
+ * longest names this product allows.
+ */
+export function extremeRoutingDiagnostics(): Record<string, unknown> {
+  const long = 'a-tunnel-identifier-at-its-limit-of-sixty-four-characters-long';
+  return {
+    rules: {
+      present: [],
+      bypass: [
+        { priority: 8000, selector: 'uidrange 0-0 iif lo', present: false },
+        { priority: 8001, selector: 'ipproto udp dport 123 iif lo', present: false },
+        { priority: 8002, selector: 'ipproto tcp dport 123 iif lo', present: false },
+      ],
+      coreActive: true,
+      coreCaptureMissing: false,
+      summary: "the device's own bypass is missing (8000, 8001, 8002)",
+    },
+    servers: [
+      { id: long, server: '203.0.113.254', route: { device: 'tun0', source: null }, throughTunnel: true, note: null },
+      { id: 'france', server: 'a-very-long-server-name.provider.example.com', route: null, throughTunnel: null, note: 'a name: resolved by the client' },
+    ],
+    selectors: [
+      { name: 'wf-selector', now: 'cryptocat', members: ['cryptocat', 'block'] },
+      { name: long, now: 'block', members: [long, 'block'] },
+    ],
+    watch: { name: 'policy-rules', lastLooked: { what: "the device's own bypass is missing (8000, 8001, 8002); repaired" } },
+  };
+}

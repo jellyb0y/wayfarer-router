@@ -28,7 +28,7 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ApiFailure, api, profileApi, type MissingSecret, type StatusResponse } from '../lib/api.ts';
+import { ApiFailure, api, profileApi, type ApplyResponse, type MissingSecret, type StatusResponse } from '../lib/api.ts';
 import { useProfileEditing } from '../lib/editing.ts';
 import { pendingChanges, useDraft } from '../lib/draft.ts';
 import { useChosenProfile, useProfileTarget } from '../lib/target.ts';
@@ -40,6 +40,7 @@ import { DeviceFold } from '../components/DeviceFold.tsx';
 import { ProfileIdentityEditor } from '../components/ProfileFields.tsx';
 import { DeviceList } from '../components/DeviceList.tsx';
 import { PowerOffCard } from '../components/PowerOff.tsx';
+import { SoftwareCard } from '../components/SoftwareCard.tsx';
 import { TokensCard } from '../components/TokensCard.tsx';
 import { ARMING_MS } from '../lib/arming.ts';
 
@@ -140,6 +141,7 @@ export function Settings({ live }: { live: StatusResponse | null }): ReactElemen
         * nobody should be one tap from ending. Below both folds so that a thumb scrolling for the
         * inventory does not land on it.
         */}
+      <SoftwareCard />
       <PowerOffCard />
     </Screen>
   );
@@ -299,6 +301,52 @@ function ProfilesCard(): ReactElement {
     onError: (error) => setFailure(describe(error)),
   });
 
+  /*
+   * Activate and apply as one transaction. The window it may open is shown here, on this card: the person
+   * pressed the button here, and a countdown on another screen is a countdown nobody sees.
+   */
+  const [opened, setOpened] = useState<ApplyResponse | null>(null);
+  const [kept, setKept] = useState(false);
+  const activateAndApply = useMutation({
+    mutationFn: (id: string) => profileApi.activateAndApply(id),
+    retry: false,
+    onSuccess: (result) => {
+      setFailure(null);
+      setKept(false);
+      setOpened(result.transaction.state === 'awaiting-confirm' ? result : null);
+      setMessage(result.transaction.state === 'awaiting-confirm' ? null : t('settings.activateApplied'));
+      refresh();
+      void queryClient.invalidateQueries();
+    },
+    onError: (error) => {
+      setOpened(null);
+      setFailure(describe(error));
+      refresh();
+    },
+  });
+  // Never retried: a confirmation is a person's act, and a retry that lands after they walked away keeps
+  // a change nobody agreed to.
+  const keep = useMutation({
+    mutationFn: (id: string) => profileApi.confirmTransaction(id),
+    retry: false,
+    onSuccess: () => setKept(true),
+    onError: (error) => setFailure(describe(error)),
+  });
+
+  /*
+   * A copy made by the device. The browser never holds the secrets: the old way to copy a profile was an
+   * export with secrets, edited, then imported — every credential through this page.
+   */
+  const clone = useMutation({
+    mutationFn: (source: { id: string; name: string }) => profileApi.clone(source.id, tf('settings.cloneName', source.name).slice(0, 64)),
+    onSuccess: (copy) => {
+      setFailure(null);
+      setMessage(tf('settings.cloned', copy.name));
+      refresh();
+    },
+    onError: (error) => setFailure(describe(error)),
+  });
+
   const remove = useMutation({
     mutationFn: (id: string) => profileApi.remove(id),
     onSuccess: () => {
@@ -392,6 +440,19 @@ function ProfilesCard(): ReactElement {
             {profile.missingSecrets.length > 0 ? t('settings.activateBlocked') : t('settings.activate')}
           </button>
         )}
+        {profile.active || profile.missingSecrets.length > 0 ? null : (
+          <button
+            type="button"
+            title={t('settings.activateApplyHelp')}
+            onClick={() => activateAndApply.mutate(profile.id)}
+            disabled={activateAndApply.isPending || unsaved > 0}
+          >
+            {activateAndApply.isPending ? t('settings.activateApplyBusy') : t('settings.activateApply')}
+          </button>
+        )}
+        <button type="button" onClick={() => clone.mutate({ id: profile.id, name: profile.name })} disabled={clone.isPending}>
+          {t('settings.clone')}
+        </button>
         <button type="button" onClick={() => void download(profile.id, false)}>
           {t('settings.export')}
         </button>
@@ -427,6 +488,15 @@ function ProfilesCard(): ReactElement {
 
       {message ? <p className="note ok">{message}</p> : null}
       {failure ? <p className="note bad">{failure}</p> : null}
+      {opened === null || opened.transaction.secondsRemaining === null ? null : (
+        <ConfirmationWindow
+          secondsRemaining={opened.transaction.secondsRemaining}
+          contact="unknown"
+          confirmed={kept}
+          busy={keep.isPending}
+          onConfirm={() => keep.mutate(opened.transaction.id)}
+        />
+      )}
 
       {imported ? (
         <div className={`note ${imported.missing.length > 0 ? 'warn' : 'ok'}`}>

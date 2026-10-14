@@ -19,6 +19,7 @@ import { createStore, type Store } from '../src/state/store.ts';
 import { createProfileStore } from '../src/state/profiles.ts';
 import { createSecretPlan } from '../src/state/secret-plan.ts';
 import { DEFAULT_CONFIG } from '../src/config.ts';
+import { emptyProfile, type ProfileDocument } from '@wayfarer/schemas';
 
 interface Calls {
   restarted: string[];
@@ -60,6 +61,9 @@ function fakePlatform(calls: Calls): Platform {
       currentBootId: async () => 'boot',
     },
     http: { fetchText: async () => ({ ok: false as const, reason: 'no network in this test' }) },
+    dns: { resolveWith: async () => ({ ok: false, detail: 'no network in this test' }) },
+    scoped: {} as Platform['scoped'],
+    install: {} as Platform['install'],
     close: () => undefined,
   };
 }
@@ -85,6 +89,7 @@ function fakeTelemetry(): ServerContext['telemetry'] {
     watchLinks: () => undefined,
     watchTunnels: () => undefined,
     recordLog: () => undefined,
+    publishTransaction: () => undefined,
   };
 }
 
@@ -93,7 +98,10 @@ const notReached = (name: string): never =>
     throw new Error(`${name} should not be reached by the tunnel restart route`);
   }) as never;
 
-async function harness(t: { after(fn: () => Promise<void> | void): void }) {
+async function harness(
+  t: { after(fn: () => Promise<void> | void): void },
+  extra: Partial<ServerContext> | ((base: ServerContext) => Partial<ServerContext>) = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), 'wayfarer-tunnel-restart-'));
   const database = openDatabase({ path: join(directory, 'state.db') });
   const store = createStore(database);
@@ -138,6 +146,7 @@ async function harness(t: { after(fn: () => Promise<void> | void): void }) {
       applyDeps: {} as never,
     },
   };
+  Object.assign(context, typeof extra === 'function' ? extra(context) : extra);
 
   const app = await buildServer(context);
   // Removed whether the test passed or not: nothing this file creates outlives it.
@@ -202,4 +211,93 @@ test('tunnel restart: needs the apply scope', async (t) => {
   const response = await app.inject({ method: 'POST', url: '/api/tunnels/office/restart', headers: bearer(store, ['read']) });
   assert.equal(response.statusCode, 403);
   assert.deepEqual(calls.restarted, []);
+});
+
+/* ── the group refresh route: the same kind of request-a-thing-now, with its own refusals ─── */
+
+test('group refresh: answers with what the refresh did, and records who asked', async (t) => {
+  const asked: string[] = [];
+  const { app, store } = await harness(t, {
+    refreshGroup: async (id) => {
+      asked.push(id);
+      return {
+        report: {
+          group: id,
+          ok: true,
+          said: `${id}: added cryptocat-3`,
+          nodeCount: 3,
+          added: ['cryptocat-3'],
+          updated: [],
+          removed: [],
+          ignoredParams: [{ node: 'FR', params: ['spx'] }],
+        },
+      };
+    },
+  });
+  const response = await app.inject({ method: 'POST', url: '/api/groups/cryptocat/refresh', headers: bearer(store, ['apply']) });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(asked, ['cryptocat']);
+  assert.deepEqual(response.json().ignoredParams, [{ node: 'FR', params: ['spx'] }]);
+  assert.match(store.events({ kind: 'subscription.refresh-requested' })[0]!.summary, /token "ops"/);
+});
+
+test('group refresh: a missing group is 404, an open transaction 409, and a read token is refused', async (t) => {
+  const answers = [{ refused: 'not_found' as const }, { refused: 'transaction_open' as const }];
+  const { app, store } = await harness(t, { refreshGroup: async () => answers.shift()! });
+  const headers = bearer(store, ['apply']);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/groups/nope/refresh', headers })).statusCode, 404);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/groups/feed/refresh', headers })).statusCode, 409);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/groups/feed/refresh', headers: bearer(store, ['read']) })).statusCode, 403);
+});
+
+/* ── routing diagnostics: the readings a shell was needed for ────────────────────────────── */
+
+test('routing diagnostics: names each missing bypass rule, flags a tunnel server reached through a tunnel, and reads the selectors', async (t) => {
+  const { app, store, profiles } = await harness(t, (base) => ({
+    platform: {
+      ...base.platform,
+      net: {
+        ...base.platform.net,
+        // The core's capture is there and the device's own bypass is not: the state of 2026-10-11 21:15.
+        rules: async () => [
+          { priority: 9000, table: '2022', iif: null, uidStart: null, uidEnd: null, ipproto: null, dport: null, inverted: false },
+        ],
+        routeTo: async (address: string) => ({ device: address === '5.39.255.51' ? 'tun0' : 'end0', source: null }),
+      },
+      systemd: { ...base.platform.systemd, state: async (unit: string) => ({ unit, activeState: 'active', isActive: true, isEnabled: true, known: true }) },
+    } as typeof base.platform,
+    coreApi: () =>
+      ({
+        proxies: async () => [
+          { name: 'wf-selector', type: 'Selector', now: 'cryptocat', all: ['cryptocat', 'block'] },
+          { name: 'cryptocat', type: 'Selector', now: 'block', all: ['germany', 'france'] },
+          { name: 'germany', type: 'Socks', now: null, all: null },
+        ],
+      }) as never,
+  }));
+  const id = profiles.create({
+    ...emptyProfile({ name: 'D' }),
+    tunnels: [
+      { id: 'germany', name: 'DE', enabled: true, onUnavailable: 'block', protocol: 'vless', config: { server: '5.39.255.51', port: 8080, id: 'x', network: 'tcp', security: 'none' } },
+      { id: 'france', name: 'FR', enabled: true, onUnavailable: 'block', protocol: 'vless', config: { server: '82.21.117.116', port: 8080, id: 'y', network: 'tcp', security: 'none' } },
+    ],
+  } as ProfileDocument).id;
+  store.setActiveProfileId(id);
+
+  const response = await app.inject({ method: 'GET', url: '/api/diagnostics/routing', headers: bearer(store, ['read']) });
+  assert.equal(response.statusCode, 200, response.body);
+  const body = response.json();
+  assert.deepEqual(body.rules.bypass.map((rule: { priority: number; present: boolean }) => [rule.priority, rule.present]), [
+    [8000, false],
+    [8001, false],
+    [8002, false],
+  ]);
+  assert.equal(body.rules.coreCaptureMissing, false);
+  assert.match(body.rules.summary, /own bypass is missing/);
+  const byId = Object.fromEntries(body.servers.map((entry: { id: string; throughTunnel: boolean }) => [entry.id, entry.throughTunnel]));
+  assert.deepEqual(byId, { germany: true, france: false });
+  assert.deepEqual(body.selectors.map((selector: { name: string; now: string }) => [selector.name, selector.now]), [
+    ['wf-selector', 'cryptocat'],
+    ['cryptocat', 'block'],
+  ]);
 });

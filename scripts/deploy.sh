@@ -19,7 +19,9 @@
 #   WAYFARER_HOST=… ./scripts/deploy.sh --listen-interface wlanap  serve on that interface too
 #   WAYFARER_HOST=… ./scripts/deploy.sh --no-build                 deploy what is already built
 #
-# WAYFARER_SSH_KEY is passed to ssh/scp when set.
+# WAYFARER_SSH_KEY is passed to ssh/scp when set. WAYFARER_UPDATE_KEY, when set, names the public update
+# signing key (scripts/bundle.ts keygen) to install on the device, so it accepts signed bundles through
+# POST /api/system/update from then on — the last deploy that needs this script.
 #
 # ── What reaches the device, and what does not ────────────────────────────────────────────
 #
@@ -315,6 +317,12 @@ if [ "$FAST" = 1 ]; then
   if [ -d "$REPO/apps/ui/dist" ]; then
     copy_to_device --delete "$REPO/apps/ui/dist/" "$HOST:/opt/wayfarer/ui/"
   fi
+  if [ -n "${WAYFARER_UPDATE_KEY:-}" ]; then
+    grep -q 'BEGIN PUBLIC KEY' "$WAYFARER_UPDATE_KEY" || die "WAYFARER_UPDATE_KEY is not a PEM public key (never the private one)"
+    log "installing the update signing key"
+    copy_to_device "$WAYFARER_UPDATE_KEY" "$HOST:/etc/wayfarer/update-signing.pub"
+    on_device 'chmod 0644 /etc/wayfarer/update-signing.pub'
+  fi
   log "restarting"
   on_device 'systemctl restart wayfarer.service'
 else
@@ -330,8 +338,14 @@ else
   if [ -d "$REPO/apps/ui/dist" ]; then
     copy_to_device --delete "$REPO/apps/ui/dist/" "$HOST:$REMOTE_PAYLOAD/apps/ui/dist/"
   fi
+  UPDATE_KEY_ARG=""
+  if [ -n "${WAYFARER_UPDATE_KEY:-}" ]; then
+    grep -q 'BEGIN PUBLIC KEY' "$WAYFARER_UPDATE_KEY" || die "WAYFARER_UPDATE_KEY is not a PEM public key (never the private one)"
+    copy_to_device "$WAYFARER_UPDATE_KEY" "$HOST:$REMOTE_PAYLOAD/update-signing.pub"
+    UPDATE_KEY_ARG="--update-key $REMOTE_PAYLOAD/update-signing.pub"
+  fi
   log "running the installer (host settings skipped: use install.sh directly to apply them)"
-  on_device "chmod +x $REMOTE_PAYLOAD/deploy/install.sh $REMOTE_PAYLOAD/deploy/set-fsck-repair.sh $REMOTE_PAYLOAD/deploy/bench/wayfarer-deadman && $REMOTE_PAYLOAD/deploy/install.sh --skip-host-settings"
+  on_device "chmod +x $REMOTE_PAYLOAD/deploy/install.sh $REMOTE_PAYLOAD/deploy/set-fsck-repair.sh $REMOTE_PAYLOAD/deploy/bench/wayfarer-deadman && $REMOTE_PAYLOAD/deploy/install.sh --skip-host-settings $UPDATE_KEY_ARG"
 
   # Removed once it has done its job. Keeping it would leave a second copy of every artefact on
   # the card, which the next person to look would reasonably mistake for the running version.

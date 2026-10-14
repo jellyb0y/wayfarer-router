@@ -87,7 +87,7 @@ export interface LiveStatus {
 }
 
 export interface TelemetryEvent {
-  event: 'status' | 'unit' | 'station' | 'log' | 'hello';
+  event: 'status' | 'unit' | 'station' | 'log' | 'hello' | 'transaction';
   data: unknown;
   /** Monotonic within a process lifetime; used as the stream's event id. */
   id: number;
@@ -125,6 +125,11 @@ export interface Telemetry {
    */
   watchTunnels(tunnels: { id: string; units: string[] }[]): void;
   recordLog(entry: { level: string; msg: string; at: string }): void;
+  /**
+   * A transaction changed: its row as `GET /api/transactions/:id` would show it. Carried on the stream so
+   * an apply that answered `202` can be followed without polling; the row stays the authority.
+   */
+  publishTransaction(row: unknown): void;
 }
 
 export interface StartOptions {
@@ -278,6 +283,10 @@ export function createTelemetry(platform: Platform): Telemetry {
     async pollNow() {
       if (runPollNow === null) return false;
       return await runPollNow();
+    },
+
+    publishTransaction(row) {
+      emit('transaction', row);
     },
 
     recordLog(entry) {

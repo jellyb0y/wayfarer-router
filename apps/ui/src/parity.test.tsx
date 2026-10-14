@@ -59,6 +59,7 @@ import { Network } from './pages/Network.tsx';
 import { Routing } from './pages/Routing.tsx';
 import { Tunnels } from './pages/Tunnels.tsx';
 import { Settings } from './pages/Settings.tsx';
+import { Diagnostics } from './pages/Diagnostics.tsx';
 import { useDraft } from './lib/draft.ts';
 import { harvestScreen, normalisePointer } from './lib/harvest.ts';
 import { compareManifest, describeManifest, type Manifest, type ManifestEntry } from './lib/manifest.ts';
@@ -69,6 +70,7 @@ import {
   extremeFleet,
   extremeInventory,
   extremeLogs,
+  extremeRoutingDiagnostics,
   extremeProfileDocument,
   extremeProfiles,
   extremeStatus,
@@ -131,6 +133,8 @@ const SCREENS: {
    * nothing" and is exactly the silent shrinkage this file exists to make impossible.
    */
   { name: 'settings', element: () => <Settings live={null} />, loaded: /Fill secrets first/, editsProfile: true },
+  // Reads the device and edits nothing; anchored on a reading only the fixture can supply.
+  { name: 'diagnostics', element: () => <Diagnostics />, loaded: /own bypass is missing/ },
 ];
 
 function stubDevice(): void {
@@ -145,6 +149,7 @@ function stubDevice(): void {
     if (url.includes('/api/inventory')) return answer(extremeInventory());
     if (url.includes('/api/eventlog')) return answer(extremeEventLog());
     if (url.includes('/api/logs')) return answer(extremeLogs());
+    if (url.includes('/api/diagnostics/routing')) return answer(extremeRoutingDiagnostics());
     if (/\/api\/profiles\/[^/]+$/.test(url)) return answer({ document: extremeProfileDocument(), missingSecrets: [] });
     if (url.includes('/api/profiles')) return answer(extremeProfiles());
     return answer({ empty: true, findings: [], humanDiff: [], notes: [], bindings: [] });

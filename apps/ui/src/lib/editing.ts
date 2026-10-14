@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, profileApi, type ApplyResponse, type PlanResponse } from './api.ts';
+import { api, profileApi, type ApplyResponse, type PlanResponse, type TransactionView } from './api.ts';
 import { pendingChanges, toWriteBody, useDraft } from './draft.ts';
 
 export interface EditingFailure {
@@ -36,6 +36,8 @@ export function useProfileEditing(id: string | undefined) {
   const draft = useDraft();
   const [review, setReview] = useState<PlanResponse | null>(null);
   const [outcome, setOutcome] = useState<ApplyResponse | null>(null);
+  /** The open window's row, read while it is open: its traffic check and whether it was reverted. */
+  const [windowRow, setWindowRow] = useState<{ state: string; dataPlane: TransactionView['dataPlane'] } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   /**
    * Whether this page can still reach the device.
@@ -135,16 +137,26 @@ export function useProfileEditing(id: string | undefined) {
    * device, so the countdown can say so instead of silently freezing. Cheap, frequent, and pointed
    * at the one route that needs no authentication and touches nothing.
    */
-  const windowOpen = outcome?.transaction.state === 'awaiting-confirm' && !confirmed;
+  const windowOpen = outcome?.transaction.state === 'awaiting-confirm' && !confirmed && windowRow?.state !== 'reverted';
   useEffect(() => {
     if (!windowOpen) return;
     let cancelled = false;
+    const transactionId = outcome!.transaction.id;
     const probe = async (): Promise<void> => {
       try {
         await api.health();
         if (!cancelled) setContact('ok');
       } catch {
         if (!cancelled) setContact('lost');
+        return;
+      }
+      // The row as well: it carries the device's traffic check, and says when the device reverted the
+      // change itself — which this page would otherwise only learn when its countdown ran out.
+      try {
+        const row = await profileApi.transaction(transactionId);
+        if (!cancelled) setWindowRow({ state: row.state, dataPlane: row.dataPlane });
+      } catch {
+        /* Contact is the health probe's to judge; a missed read of the row is retried on the next tick. */
       }
     };
     void probe();
@@ -160,6 +172,7 @@ export function useProfileEditing(id: string | undefined) {
     onSuccess: (result) => {
       setFailure(null);
       setOutcome(result);
+      setWindowRow(null);
       setConfirmed(false);
       // Deliberately not 'ok': the apply's reply left the device before the change took effect, so
       // it says nothing about whether this page can still reach it. The poll decides.
@@ -184,6 +197,8 @@ export function useProfileEditing(id: string | undefined) {
     review,
     setReview,
     outcome,
+    /** What the device reports about the open window: its traffic check and whether it reverted. */
+    window: windowRow,
     confirmed,
     contact,
     failure,

@@ -93,6 +93,8 @@ export function PendingBar({
           confirmed={editing.confirmed}
           busy={editing.confirm.isPending}
           onConfirm={() => editing.confirm.mutate(editing.outcome!.transaction.id)}
+          dataPlane={editing.window?.dataPlane ?? null}
+          reverted={editing.window?.state === 'reverted'}
         />
       ) : null}
 
