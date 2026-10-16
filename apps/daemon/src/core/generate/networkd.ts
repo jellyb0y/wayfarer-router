@@ -46,7 +46,7 @@ export function generateNetworkd(input: NetworkdInput): ManagedFile[] {
       consumedBy: { kind: 'external', by: 'systemd-networkd' },
       purpose: `addressing for the local network on ${input.lanInterface}`,
       content: [
-        generatedHeader('#', profile.meta.name).trimEnd(),
+        generatedHeader('#').trimEnd(),
         '',
         '[Match]',
         `Name=${input.lanInterface}`,
@@ -91,7 +91,7 @@ export function generateNetworkd(input: NetworkdInput): ManagedFile[] {
 
 function uplinkNetwork(profile: ProfileDocument, uplink: Uplink, interfaceName: string): string {
   const lines: string[] = [];
-  lines.push(generatedHeader('#', profile.meta.name).trimEnd());
+  lines.push(generatedHeader('#').trimEnd());
   lines.push('');
   lines.push('[Match]');
   lines.push(`Name=${interfaceName}`);

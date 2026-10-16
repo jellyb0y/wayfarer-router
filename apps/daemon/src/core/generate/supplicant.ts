@@ -56,8 +56,6 @@ export interface SupplicantInput {
   uplink: Extract<Uplink, { kind: 'wifi-sta' }>;
   /** The resolved interface name, used only in the comment header. */
   interfaceName: string;
-  /** The profile's name, for the generated header. */
-  profileName: string;
   /** The passphrase in the clear, or `null` for an open network. */
   passphrase: string | null;
 }
@@ -86,12 +84,12 @@ export class PassphraseLengthError extends Error {
 }
 
 export function generateSupplicant(input: SupplicantInput): string {
-  const { uplink, interfaceName, profileName, passphrase } = input;
+  const { uplink, interfaceName, passphrase } = input;
   const ssidBytes = Buffer.from(uplink.config.ssid, 'utf8');
   if (ssidBytes.length > 32) throw new SsidTooLongError(ssidBytes.length);
 
   const lines: string[] = [];
-  lines.push(generatedHeader('#', profileName).trimEnd());
+  lines.push(generatedHeader('#').trimEnd());
   lines.push(`# The wireless uplink on ${interfaceName}.`);
   lines.push('#');
   lines.push(`# Network name: ${describeSsid(uplink.config.ssid)}`);

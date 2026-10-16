@@ -51,7 +51,7 @@ export function generateHostapd(input: HostapdInput): string {
   const { radio, interfaceName } = input;
   const lines: string[] = [];
 
-  lines.push(generatedHeader('#', input.profile.meta.name).trimEnd());
+  lines.push(generatedHeader('#').trimEnd());
   lines.push(`# Radio: ${radio.phy}. Capabilities below are what this driver published, not defaults.`);
   lines.push('');
 
@@ -163,15 +163,25 @@ export function generateHostapd(input: HostapdInput): string {
   }
 
   lines.push('');
-  lines.push('# WPA2 and WPA3 together with CCMP only: TKIP caps the whole network at 54 Mbit/s and is');
-  lines.push('# broken. sae_require_mfp with the mixed mode lets a WPA3 client get management-frame');
-  lines.push('# protection without excluding a WPA2 one.');
-  lines.push('wpa=2');
-  lines.push('wpa_key_mgmt=WPA-PSK SAE');
-  lines.push('wpa_pairwise=CCMP');
-  lines.push('rsn_pairwise=CCMP');
-  lines.push('ieee80211w=1');
-  lines.push('sae_require_mfp=1');
+  if (accessPoint.wpa3 === false) {
+    lines.push('# WPA2 alone with CCMP, as the profile asks (accessPoint.wpa3): no management-frame protection,');
+    lines.push('# because some drivers report it and refuse its key, and the access point then does not start.');
+    lines.push('wpa=2');
+    lines.push('wpa_key_mgmt=WPA-PSK');
+    lines.push('wpa_pairwise=CCMP');
+    lines.push('rsn_pairwise=CCMP');
+    lines.push('ieee80211w=0');
+  } else {
+    lines.push('# WPA2 and WPA3 together with CCMP only: TKIP caps the whole network at 54 Mbit/s and is');
+    lines.push('# broken. sae_require_mfp with the mixed mode lets a WPA3 client get management-frame');
+    lines.push('# protection without excluding a WPA2 one.');
+    lines.push('wpa=2');
+    lines.push('wpa_key_mgmt=WPA-PSK SAE');
+    lines.push('wpa_pairwise=CCMP');
+    lines.push('rsn_pairwise=CCMP');
+    lines.push('ieee80211w=1');
+    lines.push('sae_require_mfp=1');
+  }
   lines.push(`wpa_passphrase=${input.passphrase}`);
 
   const maxStations = radio.reported.maxAssociatedStations;
@@ -235,9 +245,17 @@ export function vhtCapabilities(hex: string): string {
   if (value & 0x0020) capabilities.push('[SHORT-GI-80]');
   if (value & 0x0040) capabilities.push('[SHORT-GI-160]');
   if (value & 0x0080) capabilities.push('[TX-STBC-2BY1]');
-  if (value & 0x0800) capabilities.push('[SU-BEAMFORMEE]');
-  if (value & 0x00080000) capabilities.push('[RX-ANTENNA-PATTERN]');
-  if (value & 0x00100000) capabilities.push('[TX-ANTENNA-PATTERN]');
+  /*
+   * Bit positions from the VHT Capabilities Info field of 802.11ac. Until 2026-10-16 the last three lines
+   * read bit 11 as beamformee and bits 19/20 as the antenna patterns; those are SU-beamformer and the two
+   * MU-beamforming bits. The USB adapter's `0x339071b2` also sets bit 29, so its access point came up by
+   * coincidence; the built-in radio's `0x01b07031` does not, and hostapd refused to start on it — "Driver
+   * does not support configured VHT capability [VHT_CAP_TX_ANTENNA_PATTERN]".
+   */
+  if (value & 0x0800) capabilities.push('[SU-BEAMFORMER]');
+  if (value & 0x1000) capabilities.push('[SU-BEAMFORMEE]');
+  if (value & 0x10000000) capabilities.push('[RX-ANTENNA-PATTERN]');
+  if (value & 0x20000000) capabilities.push('[TX-ANTENNA-PATTERN]');
 
   return capabilities.join('');
 }

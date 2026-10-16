@@ -14,10 +14,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, chmod, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, chmod, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { run } from '../src/platform/exec.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const SCRIPT = join(import.meta.dirname, '..', '..', '..', 'scripts', 'deploy.sh');
 // The repository root is not needed here: see the note in `deploy()` below.
@@ -36,7 +36,7 @@ async function standIn(options: {
   env: Record<string, string>;
   transcript: () => Promise<string[]>;
 }> {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-deploy-'));
+  const directory = await scratchDir('wayfarer-deploy-');
   const log = join(directory, 'transcript');
   await writeFile(log, '');
 

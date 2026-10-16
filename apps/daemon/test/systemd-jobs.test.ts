@@ -17,6 +17,7 @@
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
 import { createSystemdController, type SystemBusLike } from '../src/platform/systemd.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 type Listener = (...args: unknown[]) => void;
 
@@ -184,7 +185,7 @@ test('stopping a transient unit stops the timer, and the service only when we ar
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
 
-  const dir = await mkdtemp(join(tmpdir(), 'wayfarer-systemctl-'));
+  const dir = await scratchDir('wayfarer-systemctl-');
   const log = join(dir, 'calls');
   const fake = join(dir, 'systemctl');
   // Records its arguments and succeeds, so the assertion is about what was asked of systemctl.
@@ -226,7 +227,7 @@ test('a transient unit that no longer exists counts as disarmed, not as a failur
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
 
-  const dir = await mkdtemp(join(tmpdir(), 'wayfarer-systemctl-gone-'));
+  const dir = await scratchDir('wayfarer-systemctl-gone-');
   const fake = join(dir, 'systemctl');
   // What systemd says about a transient unit after a reboot has taken it away.
   await writeFile(fake, '#!/bin/sh\necho "Failed to stop x.timer: Unit x.timer not loaded." >&2\nexit 5\n');
@@ -255,7 +256,7 @@ test('poweroff asks systemctl for an orderly power-off and nothing else', async 
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
 
-  const dir = await mkdtemp(join(tmpdir(), 'wayfarer-systemctl-poweroff-'));
+  const dir = await scratchDir('wayfarer-systemctl-poweroff-');
   const log = join(dir, 'calls');
   const fake = join(dir, 'systemctl');
   // A stand-in that records and succeeds. Pointed at by path, so nothing in this test can reach the

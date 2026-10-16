@@ -166,3 +166,25 @@ test('reverting an activate-and-apply puts the previous selection back', async (
   // runs the old configuration while naming the new profile active, and the next apply reinstalls it.
   assert.equal(bench.store.device().activeProfileId, before.id);
 });
+
+test('a revert that does not complete still puts the previous selection back, so the next apply finishes it', async (t) => {
+  const bench = await device({ recovery: true });
+  t.after(bench.close);
+  const before = bench.profiles.create(emptyProfile({ name: 'Bench AP' }) as ProfileDocument);
+  const after = bench.profiles.create(bench.profile);
+  bench.store.setActiveProfileId(after.id);
+
+  const outcome = await applyDocument(bench.deps, { profileId: after.id, document: bench.profile, activeProfileBefore: before.id });
+  const id = outcome.transaction!.id;
+  bench.deps.windowWatch!.stop(id);
+  // The revert's own reconcile fails, as `restart wf-dhcp@…` did on the bench board on 2026-10-14.
+  (bench.deps.platform.files as { writeAtomic: unknown }).writeAtomic = async () => {
+    throw new Error('refused');
+  };
+  const reverted = await revertTransaction(bench.deps, id, REVERT_REASONS.operatorRequested);
+  assert.equal(reverted.ok, false);
+
+  // Mutation: restore the selection only after a completed revert and this goes red — the copy being
+  // undone stays named as active, and the next apply reinstalls it.
+  assert.equal(bench.store.device().activeProfileId, before.id);
+});

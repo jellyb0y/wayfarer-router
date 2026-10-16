@@ -64,6 +64,10 @@
       "screen": "network"
     },
     {
+      "pointer": "/accessPoint/wpa3",
+      "screen": "network"
+    },
+    {
       "pointer": "/dns/direct",
       "screen": "network"
     },

@@ -9,15 +9,16 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, chmod } from 'node:fs/promises';
+import { readFile, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from '../src/platform/exec.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const SCRIPT = join(import.meta.dirname, '..', '..', '..', 'deploy', 'set-fsck-repair.sh');
 
 async function fixture(name: string, content: string): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-boot-'));
+  const directory = await scratchDir('wayfarer-boot-');
   const path = join(directory, name);
   await writeFile(path, content);
   await chmod(path, 0o644);

@@ -338,6 +338,14 @@ export const AccessPoint = Source('person', Type.Object(
     ssid: Type.String({ minLength: 1, maxLength: 32 }),
     passphrase: Secret({ kind: 'psk' }),
     /**
+     * WPA3 beside WPA2, with management-frame protection. On unless set to `false`, which leaves WPA2
+     * alone and no protection of management frames. Measured 2026-10-16 on the Orange Pi Zero3's built-in
+     * radio: its driver lists the CMAC cipher, then refuses the management-frame key hostapd installs
+     * (`set_key default failed; err=-95 Operation not supported`), and the access point does not start.
+     * A capability the driver reports and does not honour cannot be discovered, so the owner decides.
+     */
+    wpa3: Type.Optional(Type.Boolean({ default: true })),
+    /**
      * Required only when this radio also carries a `wifi-sta` uplink *and* the driver publishes a
      * combination that permits both. Such a combination is limited to one channel, so the access
      * point follows whatever channel the upstream network is on — and the upstream can change

@@ -15,9 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,6 +38,7 @@ import { createSecretPlan } from '../src/state/secret-plan.ts';
 import type { Platform } from '../src/platform/index.ts';
 import { builtInAndDongle, cleanFacts } from './helpers/synthetic-inventory.ts';
 import { allPolicyRules } from './helpers/policy-rules.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const CORE_SCHEMA = readFileSync(
   `${dirname(fileURLToPath(import.meta.url))}/../../../packages/protocols/test/fixtures/core-schema-sing-box-1.14.0.json`,
@@ -241,7 +240,7 @@ async function device() {
     capturedResolvers: async () => new Map(),
   };
 
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-follow-net-'));
+  const directory = await scratchDir('wayfarer-follow-net-');
   const database = openDatabase({ path: join(directory, 'state.db') });
   const store = createStore(database);
   const profiles = createProfileStore(database, createSecretPlan());

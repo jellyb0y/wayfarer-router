@@ -13,8 +13,7 @@
 
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -26,6 +25,7 @@ import {
 import { compareRunningState, stockUnitFinding } from '../src/core/drift.ts';
 import { emptyDesiredState } from '../src/core/desired-state.ts';
 import { run } from '../src/platform/exec.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const INSTALLER = join(import.meta.dirname, '..', '..', '..', 'deploy', 'install.sh');
 
@@ -81,7 +81,7 @@ async function fakeSystemctl(initial: { load: string; enablement: string; maskRe
   calls: () => Promise<string[]>;
   enablement: () => Promise<string>;
 }> {
-  const dir = await mkdtemp(join(tmpdir(), 'wayfarer-stock-'));
+  const dir = await scratchDir('wayfarer-stock-');
   await writeFile(join(dir, 'load'), initial.load);
   await writeFile(join(dir, 'enablement'), initial.enablement);
   await writeFile(join(dir, 'calls'), '');

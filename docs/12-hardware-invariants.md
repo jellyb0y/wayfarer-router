@@ -575,6 +575,61 @@ should see that it is off on purpose.
 **What is given up.** Not measured here. Wi-Fi 6 mostly buys airtime efficiency with many clients;
 this access point serves a handful, and the measured downlink without it was 468 Mbit/s.
 
+## An mt7921u access point can go silent while everything above it reports healthy
+
+**Symptom (bench board, 2026-10-16).** The access point `CryptoCAT_vpn` disappeared overnight while the board
+itself, the tunnels and the daemon kept working. The owner reports it is the second time; the first was cleared
+by a reboot, and no journal of it survived.
+
+**What was measured** (over the Ethernet uplink, 09:38 MSK):
+
+* Kernel, 02:13:41: `mt7921u 2-1:1.0: Message 00020003 (seq 7) timeout`, then `timed out waiting for pending tx`
+  and a `WARNING … kthread_park` from `mt7921_mac_reset_work` — the driver reset the firmware in place.
+* Clients still re-associated until 03:15; after that hostapd logged nothing for six hours.
+* At 09:38: hostapd `state=ENABLED`, `NRestarts=0`, one station listed; the interface moved **0 packets in either
+  direction in 10 s**. The daemon's event log has nothing about the access point for the whole period.
+* `systemctl restart wf-hostapd@wlx90de8047b4b4` at 09:41 (another `timed out waiting for pending tx` in the
+  kernel log as it stopped) brought it back: a client associated and completed the handshake within seconds, and
+  the owner saw the network again.
+* Context: the adapter is on USB 2.0 (`speed` 480), firmware build `20230526`, 5 GHz channel 40 at 80 MHz;
+  SoC at 38 °C. `iw` reports `txpower 3.00 dBm` both before and after the restart against a 23 dBm channel limit —
+  whether that figure is real or a reporting artefact of the driver was not established.
+* The adapter's own sensor (`hwmon` `mt7921_phy0`) read **76 °C** at 09:50, against 41–44 °C for every sensor on
+  the SoC, with one client connected and almost no traffic. The owner reports the signal feels weaker than it
+  should. Whether heat caused the hang, or the firmware lowers power when hot, is an assumption to test, not a
+  finding.
+
+**Cause not established.** Firmware hangs of this chip in AP mode are a known class of fault; which of the
+USB 2.0 link, the power budget, the 80 MHz width or the old firmware matters here is an assumption until a
+change is left in place for days and the hang does not return.
+
+**The trap.** Every layer above the radio reported health: the unit was `active`, hostapd said `ENABLED` and
+listed a station, and nothing in Wayfarer looks at whether the radio actually moves frames. A device that is
+"up" by every check it makes can be serving nobody for hours.
+
+## The built-in radio as the access point: what it took (2026-10-16)
+
+With the USB adapter unplugged, the access point was moved to the built-in radio (`phy-builtin`, `wfwan0`)
+through a copy of the profile. Three attempts were reverted by the confirmation window before the fourth held;
+each failure was a fault of ours or of the driver, and each is recorded where it was fixed:
+
+1. **`vht_capab` read from the wrong bits.** hostapd: `Driver does not support configured VHT capability
+   [VHT_CAP_TX_ANTENNA_PATTERN]`. The generator read bits 19/20 as the antenna patterns and bit 11 as
+   SU-beamformee; in the 802.11ac VHT Capabilities Info field those are MU-beamformer, MU-beamformee and
+   SU-beamformer, and the patterns are bits 28/29. The adapter's `0x339071b2` sets bit 29 as well, so its
+   access point had started by coincidence; the built-in `0x01b07031` does not. Fixed in `vhtCapabilities`
+   (`test/vht-capabilities.test.ts`).
+2. **80 MHz: `COUNTRY_UPDATE->HT_SCAN`, then `Interface initialization failed`.** Not separated from the next
+   fault, which comes later in the same start-up — whether the scan itself fails on this driver is **not
+   established**. 20 MHz skips the scan.
+3. **Management-frame protection.** `hostapd -dd`: `nl80211: set_key default failed; err=-95 Operation not
+   supported` on the BIP key (`alg=4`, `key_idx=4`), then `WPA: group state machine entering state
+   FATAL_FAILURE`. The driver lists CMAC (`00-0f-ac:6`) among its ciphers and refuses the key anyway, so no
+   report predicts it. `accessPoint.wpa3: false` (WPA2 alone, `ieee80211w=0`) is the owner's switch for it.
+
+Held at 10:11 MSK: 5 GHz channel 36, 20 MHz, WPA2; `AP-ENABLED`, the traffic check passed 13 s into the window,
+a client associated within a minute.
+
 ## The card's device name is not stable across boots
 
 Measured on the bench board, 2026-09-21. The same physical SD card, the same image, two boots:

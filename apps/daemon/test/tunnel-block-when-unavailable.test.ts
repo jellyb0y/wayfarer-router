@@ -25,6 +25,7 @@ import {
   guardSelectorTag,
   type ProfileDocument,
 } from '@wayfarer/schemas';
+import { scratchDir } from './helpers/scratch.ts';
 
 const context = { uplinkInterfaces: [], uplinkNetworks: [] };
 
@@ -440,7 +441,7 @@ test('the reader takes the first address and ignores blank lines', async () => {
   const { join: joinPath } = await import('node:path');
   const { readCapturedResolvers } = await import('../src/platform/captured-resolvers.ts');
 
-  const dir = await mkdtemp(joinPath(tmpdir(), 'wf-resolvers-'));
+  const dir = await scratchDir('wayfarer-resolvers-');
   // The producer may write several, newline separated; the first is the one in use.
   await writeFile(joinPath(dir, 'hq.dns'), '10.184.40.5\n10.184.48.5\n');
   await writeFile(joinPath(dir, 'corp.dns'), '\n10.122.0.1\n');

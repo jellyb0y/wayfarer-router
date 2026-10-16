@@ -23,8 +23,6 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildServer, type ServerContext } from '../src/api/server.ts';
@@ -33,6 +31,7 @@ import { openDatabase } from '../src/state/db.ts';
 import { createStore, type Store } from '../src/state/store.ts';
 import { DEFAULT_CONFIG } from '../src/config.ts';
 import type { Platform } from '../src/platform/index.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 /** Answers nothing interesting: these tests are about what reaches the wire, not what the kernel says. */
 function fakePlatform(): Platform {
@@ -148,7 +147,7 @@ interface Harness {
  * it has to be constructible on purpose.
  */
 async function harness(channels?: () => ManagementChannels | null): Promise<Harness> {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-visibility-'));
+  const directory = await scratchDir('wayfarer-visibility-');
   const database = openDatabase({ path: join(directory, 'state.db') });
   const store = createStore(database);
   await store.setAdminPassword('a-long-enough-password');

@@ -5,15 +5,25 @@
  * was actually performed on the interface, reduced to the markup or the file sequence that produced
  * it, so that running it reproduces the failure rather than restating the fix.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { fireEvent, render } from '@testing-library/react';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { useState } from 'react';
 
 import { changedPointers, harvestScreen, normalisePointer } from './harvest.ts';
 import { actualPath, compareManifest, type Manifest } from './manifest.ts';
+
+const scratch: string[] = [];
+afterEach(() => {
+  for (const directory of scratch.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+const scratchDir = (): string => {
+  const directory = mkdtempSync(join(tmpdir(), 'wayfarer-manifest-'));
+  scratch.push(directory);
+  return directory;
+};
 
 const click = (node: Element): void => {
   fireEvent.click(node);
@@ -178,7 +188,7 @@ describe('the manifest guard stays armed on the second run', () => {
    * and for any pointer the parity comparison does not separately require, green forever after.
    */
   it('reports the same change however many times it is run', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'wayfarer-manifest-'));
+    const directory = scratchDir();
     const path = join(directory, 'parity-manifest.json');
     writeFileSync(path, `${JSON.stringify(manifest(['/uplinks/-/config/ssid']), null, 2)}\n`, 'utf8');
 
@@ -194,7 +204,7 @@ describe('the manifest guard stays armed on the second run', () => {
   });
 
   it('accepts a change only when somebody asks for it', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'wayfarer-manifest-'));
+    const directory = scratchDir();
     const path = join(directory, 'parity-manifest.json');
     writeFileSync(path, `${JSON.stringify(manifest(['/uplinks/-/config/ssid']), null, 2)}\n`, 'utf8');
 
@@ -203,7 +213,7 @@ describe('the manifest guard stays armed on the second run', () => {
   });
 
   it('writes a manifest that is not there at all, and still fails', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'wayfarer-manifest-'));
+    const directory = scratchDir();
     const path = join(directory, 'parity-manifest.json');
     const verdict = compareManifest(path, manifest(['/a']), false);
     expect(verdict.status).toBe('absent');

@@ -27,6 +27,7 @@ import { createStore, type Store } from '../src/state/store.ts';
 import type { Platform } from '../src/platform/index.ts';
 import type { ProfileStore } from '../src/state/profiles.ts';
 import type { PipelineContext } from '../src/core/pipeline.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -59,7 +60,7 @@ test('the one constructor reads the captured resolvers unless a test replaces th
   const production = devicePipeline({ platform: {} as Platform, config, boundAddresses: () => [] });
   assert.equal(typeof production.capturedResolvers, 'function', 'a context without captures derives the wrong resolver');
 
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-pipe-'));
+  const root = await scratchDir('wayfarer-pipe-');
   await writeFile(join(root, 'hq.dns'), '10.184.48.5\n');
   const { readCapturedResolvers } = await import('../src/platform/captured-resolvers.ts');
   const overridden = devicePipeline({
@@ -74,7 +75,7 @@ test('the one constructor reads the captured resolvers unless a test replaces th
 /* ── 2. the report served is the latest one, whoever made it ───────────────────────────── */
 
 async function sharedDatabase(): Promise<Store> {
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-lastdrift-'));
+  const root = await scratchDir('wayfarer-lastdrift-');
   const store = createStore(openDatabase({ path: join(root, 'state.db') }));
   store.device();
   return store;

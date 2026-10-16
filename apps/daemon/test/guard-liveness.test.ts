@@ -41,6 +41,7 @@ import { pingOutcome, type PingOutcome } from '../src/platform/net.ts';
 import { openDatabase } from '../src/state/db.ts';
 import { createStore } from '../src/state/store.ts';
 import { builtInAndDongle, cleanFacts } from './helpers/synthetic-inventory.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(here, 'fixtures');
@@ -189,7 +190,7 @@ async function bench(
     upScriptPath: '/opt/wayfarer/bin/tunnel-up',
     wayBinary: '/usr/local/bin/way',
   });
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-guard-liveness-'));
+  const root = await scratchDir('wayfarer-guard-liveness-');
   const store = createStore(openDatabase({ path: join(root, 'state.db') }));
   store.setTunnelUnits(planned.desired.tunnelUnits);
   const statusDirectory = join(root, 'openvpn');

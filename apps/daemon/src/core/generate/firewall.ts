@@ -75,7 +75,7 @@ export function generateFirewall(input: FirewallInput): string {
   const lan = lanInterface;
   const wan = wanInterfaces;
 
-  lines.push(generatedHeader('#', profile.meta.name));
+  lines.push(generatedHeader('#'));
   lines.push('#');
   lines.push('# Only the table below is touched. Tables belonging to other software on this device —');
   lines.push('# including the one a proxy core creates for redirection — are left exactly as they are.');

@@ -19,8 +19,6 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildServer, DEFAULT_PASSWORD, type ServerContext } from '../src/api/server.ts';
@@ -31,6 +29,7 @@ import { createProfileStore } from '../src/state/profiles.ts';
 import { createSecretPlan } from '../src/state/secret-plan.ts';
 import { DEFAULT_CONFIG } from '../src/config.ts';
 import type { Platform } from '../src/platform/index.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 /** Answers nothing interesting: these tests are about what the surface says, not what it reports. */
 function fakePlatform(): Platform {
@@ -152,7 +151,7 @@ interface Harness {
  * which is the only state in which E16 can be observed at all.
  */
 async function harness(options: { password?: string | null } = {}): Promise<Harness> {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-docs-'));
+  const directory = await scratchDir('wayfarer-docs-');
   const database = openDatabase({ path: join(directory, 'state.db') });
   const store = createStore(database);
   const password = options.password === undefined ? 'a-long-enough-password' : options.password;

@@ -205,6 +205,12 @@ export function AccessPointEditor({ document }: { document: Record<string, unkno
         value={accessPoint['passphrase']}
         help="Empty means an open network: anyone in range joins, and everything they send is readable in the air."
       />
+      <CheckField
+        pointer="/accessPoint/wpa3"
+        label="WPA3 and protected management frames"
+        checked={accessPoint['wpa3'] !== false}
+        help="On by default. Turn it off only for a radio whose access point does not start with it: some built-in radios claim it and refuse it. Off means WPA2 alone."
+      />
       <SelectField pointer="/accessPoint/radio/band" label="Band" value={String(radio['band'] ?? '2.4GHz')} options={BANDS} />
       <NumberField pointer="/accessPoint/radio/channel" label="Channel" value={radio['channel']} min={1} />
       <SelectField

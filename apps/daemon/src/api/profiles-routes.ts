@@ -679,37 +679,67 @@ export function registerProfileRoutes(app: FastifyInstance, context: ProfileRout
       preHandler: requireScope('apply'),
       schema: {
         summary: 'Revert a transaction now, without waiting for its deadline.',
+        description:
+          'A revert that ends within about a second answers with its result. A longer one answers `202` with ' +
+          '`{ transaction: { id, state: "reverting" } }` and goes on; follow it with `GET /api/transactions/:id` ' +
+          'or the `transaction` events. `?wait=1` holds the request until the end.',
         params: Type.Object({ id: Type.String() }),
+        querystring: Type.Object({ wait: Type.Optional(Type.String()) }),
       },
     },
     async (request, reply) => {
       // Reverting now rather than waiting out the window. The operator has decided, and making them
       // wait three minutes for a change they already know is wrong is downtime with no purpose.
-      const outcome = await revertTransaction(
+      const id = request.params.id;
+      const work = revertTransaction(
         context.applyDeps,
-        request.params.id,
+        id,
         // The constant, not the text: the safe-mode decision reads this exact reason to tell a change
         // of mind from a failure, and two copies of it would drift.
         REVERT_REASONS.operatorRequested,
+      ).then((outcome) =>
+        outcome.ok
+          ? {
+              status: 200,
+              body: {
+                reverted: true,
+                target: outcome.target,
+                message: outcome.message,
+                // Files put back, including any that could not be: a collision needs a human and saying
+                // so here is the only place it will be seen.
+                restored: outcome.restored,
+              },
+            }
+          : {
+              status: 500,
+              body: {
+                error: {
+                  code: 'revert_failed',
+                  message: outcome.message,
+                  hint: 'Read the steps. The configuration on disk may be from either document.',
+                  detail: { restored: outcome.restored, steps: outcome.result?.steps ?? [] },
+                },
+              },
+            },
       );
-      if (!outcome.ok) {
-        return reply.status(500).send({
-          error: {
-            code: 'revert_failed',
-            message: outcome.message,
-            hint: 'Read the steps. The configuration on disk may be from either document.',
-            detail: { restored: outcome.restored, steps: outcome.result?.steps ?? [] },
-          },
-        });
+      work.catch((error: unknown) => context.applyDeps.log('error', { error: String(error) }, 'a revert ended with an exception'));
+
+      /*
+       * Answered early for the same reason an apply is. Measured on the bench board, 2026-10-14: an operator
+       * revert took 8 s and its HTTP request got no answer within the client's 120 s — the revert was
+       * reconfiguring `end0`, the link the answer had to leave by. The work goes on either way; only the
+       * answer moves.
+       */
+      if (request.query.wait !== '1') {
+        const grace = new Promise<null>((resolve) => setTimeout(() => resolve(null), SYNC_GRACE_MS).unref());
+        const early = await Promise.race([work, grace]);
+        if (early === null) {
+          return reply.status(202).send({ transaction: { id, state: 'reverting' }, follow: `/api/transactions/${id}` });
+        }
+        return reply.status(early.status).send(early.body);
       }
-      return {
-        reverted: true,
-        target: outcome.target,
-        message: outcome.message,
-        // Files put back, including any that could not be: a collision needs a human and saying so
-        // here is the only place it will be seen.
-        restored: outcome.restored,
-      };
+      const answer = await work;
+      return reply.status(answer.status).send(answer.body);
     },
   );
 

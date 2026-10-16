@@ -17,8 +17,7 @@
 
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
-import { mkdtemp, utimes, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { PATHS } from '../src/core/desired-state.ts';
@@ -32,6 +31,7 @@ import {
   type RuleSetObservation,
   type RuleSetReading,
 } from '../src/core/rule-set-age.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const NOW = Date.UTC(2026, 8, 22, 12, 0, 0);
 const HOUR = 3600 * 1000;
@@ -246,7 +246,7 @@ test('a genuinely absent file is still reported as never fetched', () => {
 /* ── the reader: which file answers for which kind of set ────────────────────────────────── */
 
 test('a remote set is bounded by the cache file and a local set is measured by its own', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-rule-set-'));
+  const root = await scratchDir('wayfarer-rule-set-');
   const localPath = join(root, 'trackers.json');
   await writeFile(localPath, '{}', 'utf8');
   const localModified = NOW - 5 * HOUR;

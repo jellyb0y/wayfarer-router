@@ -365,7 +365,6 @@ export function plan(input: PlannerInput): Plan {
       content: generateSupplicant({
         uplink,
         interfaceName,
-        profileName: profile.meta.name,
         // An absent or null key is an open network. That is a real configuration, not a mistake, and
         // the generator says so in the file rather than leaving `key_mgmt` to a default.
         passphrase: psk === undefined || psk === null ? null : secretValue(psk),
@@ -430,7 +429,7 @@ export function plan(input: PlannerInput): Plan {
     // Read by systemd-networkd at its start only, which is why a change to it restarts networkd.
     consumedBy: { kind: 'external', by: 'systemd-networkd' },
     content:
-      generatedHeader('#', profile.meta.name) +
+      generatedHeader('#') +
       '#\n' +
       '# Without this, networkd removes every policy rule it did not create, on its start and on a link\n' +
       '# reconfiguration, and the device loses the rules that keep its traffic on the right path.\n' +
@@ -447,7 +446,7 @@ export function plan(input: PlannerInput): Plan {
       // Read by systemd-sysctl at boot, not by any unit of ours.
       consumedBy: { kind: 'external', by: 'systemd-sysctl' },
       content:
-        generatedHeader('#', profile.meta.name) +
+        generatedHeader('#') +
         '#\n' +
         '# These are applied live on every apply as well. This file is what makes them survive a\n' +
         '# reboot, which the running kernel does not.\n' +
@@ -979,7 +978,7 @@ function readme(profile: ProfileDocument): ManagedFile {
     // For a person, and the only artefact here that is. It is not configuration and nothing loads it.
     consumedBy: { kind: 'reader', by: 'whoever finds this directory on a device' },
     content:
-      generatedHeader('#', profile.meta.name) +
+      generatedHeader('#') +
       '#\n' +
       '# Everything under this directory is generated from the active profile and is replaced on every\n' +
       '# apply. Editing a file here has no lasting effect: change the profile instead.\n' +

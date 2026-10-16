@@ -20,14 +20,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as nodeModule from 'node:module';
 
 import type { ServerContext } from '../src/api/server.ts';
 import type { Platform } from '../src/platform/index.ts';
 import type { Store, TokenScope } from '../src/state/store.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const loaded: string[] = [];
 const registerHooks = (nodeModule as { registerHooks?: (hooks: unknown) => unknown }).registerHooks;
@@ -131,7 +130,7 @@ const DELAY_MS = 40;
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, DELAY_MS * 4));
 
 async function harness(options: { refuseWith?: string } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-poweroff-'));
+  const directory = await scratchDir('wayfarer-poweroff-');
   const database = openDatabase({ path: join(directory, 'state.db') });
   const store = createStore(database);
   await store.setAdminPassword('a-long-enough-password');

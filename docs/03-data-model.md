@@ -71,6 +71,10 @@ the export format, so there is no second serialisation that can drift.
                // a working one".
                "wifi6": false },
     "ssid": "MyRouter", "passphrase": { "$secret": "…" },
+    // WPA3 beside WPA2, with protected management frames. Absent means on. `false` leaves WPA2
+    // alone: the Orange Pi Zero3's built-in radio lists the cipher and refuses its key, and its
+    // access point does not start otherwise — see docs/12-hardware-invariants.md.
+    "wpa3": true,
     // Required only when this radio also carries a wifi-sta uplink and the
     // driver permits it: an explicit acknowledgement that the access point
     // channel will follow the upstream network.

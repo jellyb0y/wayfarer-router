@@ -52,7 +52,6 @@ test('the generated configuration carries the space, byte for byte', () => {
   const config = generateSupplicant({
     uplink: uplinkFor(SSID) as never,
     interfaceName: 'wlan0',
-    profileName: 'Bench',
     passphrase: PASSPHRASE,
   });
   // 56 49 4e 54 41 47 45 20 — the last byte is the space.
@@ -67,13 +66,11 @@ test('the same name without the space produces a different file, in both the nam
   const withSpace = generateSupplicant({
     uplink: uplinkFor(SSID) as never,
     interfaceName: 'wlan0',
-    profileName: 'Bench',
     passphrase: PASSPHRASE,
   });
   const without = generateSupplicant({
     uplink: uplinkFor(SSID.trim()) as never,
     interfaceName: 'wlan0',
-    profileName: 'Bench',
     passphrase: PASSPHRASE,
   });
   assert.notEqual(withSpace, without, 'a trim anywhere upstream would make these two identical');
@@ -119,7 +116,6 @@ test('an open network is configured as open rather than left to a default', () =
   const config = generateSupplicant({
     uplink: uplinkFor(SSID, { psk: null }) as never,
     interfaceName: 'wlan0',
-    profileName: 'Bench',
     passphrase: null,
   });
   assert.match(config, /^\tkey_mgmt=NONE$/m);
@@ -130,7 +126,6 @@ test('a hidden network is asked for by name, or it is never found', () => {
   const config = generateSupplicant({
     uplink: uplinkFor(SSID, { hidden: true }) as never,
     interfaceName: 'wlan0',
-    profileName: 'Bench',
     passphrase: PASSPHRASE,
   });
   assert.match(config, /^\tscan_ssid=1$/m);
@@ -140,7 +135,6 @@ test('the passphrase itself never reaches the generated file', () => {
   const config = generateSupplicant({
     uplink: uplinkFor(SSID) as never,
     interfaceName: 'wlan0',
-    profileName: 'Bench',
     passphrase: PASSPHRASE,
   });
   assert.ok(

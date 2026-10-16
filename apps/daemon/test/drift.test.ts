@@ -19,8 +19,7 @@
 
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
-import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +42,7 @@ import type { ProfileStore } from '../src/state/profiles.ts';
 import type { Store } from '../src/state/store.ts';
 import { builtInAndDongle, cleanFacts } from './helpers/synthetic-inventory.ts';
 import { CONFLICTING_STOCK_UNITS } from '../src/platform/stock-units.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const CORE = PATHS.coreConfig;
 
@@ -390,7 +390,7 @@ async function bench(
    */
   stock: Map<string, { unitFileState: string; activeState: string }>;
 }> {
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-drift-'));
+  const root = await scratchDir('wayfarer-drift-');
   const on = (path: string): string => join(root, path);
   const units = new Map<string, { active: boolean; enabled: boolean }>();
   /** What the kernel currently holds. Empty until this bench converges, exactly like a fresh board. */
@@ -1096,7 +1096,7 @@ test('a hand-run `way drift` that finds a divergence is what the daemon serves a
   const { createStore } = await import('../src/state/store.ts');
   const { openDatabase } = await import('../src/state/db.ts');
   const { operatorDrift, createDriftMonitor } = await import('../src/core/drift.ts');
-  const real = createStore(openDatabase({ path: join(await mkdtemp(join(tmpdir(), 'wayfarer-opdrift-')), 'state.db') }));
+  const real = createStore(openDatabase({ path: join(await scratchDir('wayfarer-opdrift-'), 'state.db') }));
   real.device();
   // The bench's store, with the one column both processes share backed by a real database.
   const store = Object.assign(Object.create(deps.store) as Store, {

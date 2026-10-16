@@ -50,7 +50,7 @@ export function generateDhcp(input: DhcpInput): string {
   if (parsed === null) throw new Error(`network.cidr is not usable: ${profile.network.cidr}`);
 
   const lines: string[] = [];
-  lines.push(generatedHeader('#', profile.meta.name).trimEnd());
+  lines.push(generatedHeader('#').trimEnd());
   lines.push('');
 
   lines.push('# Read only this file. Include-directory scanning is not used, so a stray file in a');

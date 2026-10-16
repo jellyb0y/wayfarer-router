@@ -14,8 +14,6 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
 
@@ -35,6 +33,7 @@ import {
   radio,
   twoIdenticalDongles,
 } from './helpers/synthetic-inventory.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 const AP = { kind: 'access-point' } as const;
 
@@ -51,7 +50,7 @@ async function inventoryHarness(): Promise<{
   token: string;
   close: () => void;
 }> {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-candidates-'));
+  const directory = await scratchDir('wayfarer-candidates-');
   const database = openDatabase({ path: join(directory, 'state.db') });
   const store = createStore(database);
   await store.setAdminPassword('a-long-enough-password');

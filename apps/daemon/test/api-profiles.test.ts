@@ -2486,6 +2486,48 @@ test('a slow apply answers 202 with its transaction, refuses a second one, and l
   assert.ok(Array.isArray(row?.outcome?.steps) && row.outcome.steps.length > 0, 'the steps must be readable after a 202');
 });
 
+/**
+ * Measured on the bench board, 2026-10-14: an operator revert took 8 s and its request got no answer
+ * within the client's 120 s — it was reconfiguring the link the answer had to leave by. A slow revert
+ * answers `202` like a slow apply, and its end is read from the row.
+ */
+test('a slow revert answers 202 with its transaction, and the row says when it has ended', async (t) => {
+  const { app, store, close, headers } = await device('revert-async', { slowWritesMs: 300 });
+  t.after(() => {
+    void app.close();
+    close();
+  });
+  const id = (await app.inject({ method: 'POST', url: '/api/profiles', headers, payload: { name: 'R' } })).json<{ id: string }>().id;
+  store.setActiveProfileId(id);
+  // Applied and confirmed once, then changed and applied again, so the revert has a different document
+  // to write back — and its writes are the slow ones.
+  const first = await app.inject({ method: 'POST', url: '/api/apply?wait=1', headers, payload: {} });
+  assert.equal(first.statusCode, 200, first.body);
+  const firstId = first.json<{ transaction: { id: string } }>().transaction.id;
+  await app.inject({ method: 'POST', url: `/api/transactions/${firstId}/confirm`, headers, payload: {} });
+  const document = (await app.inject({ method: 'GET', url: `/api/profiles/${id}`, headers })).json<{ document: { network: { dhcp: { leaseHours: number } } } }>().document;
+  document.network.dhcp.leaseHours = 3;
+  const saved = await app.inject({ method: 'PUT', url: `/api/profiles/${id}`, headers, payload: document });
+  assert.equal(saved.statusCode, 200, saved.body);
+  const applied = await app.inject({ method: 'POST', url: '/api/apply?wait=1', headers, payload: {} });
+  assert.equal(applied.statusCode, 200, applied.body);
+  const transaction = applied.json<{ transaction: { id: string } }>().transaction;
+
+  const started = Date.now();
+  const undone = await app.inject({ method: 'POST', url: `/api/transactions/${transaction.id}/revert`, headers, payload: {} });
+  assert.equal(undone.statusCode, 202, undone.body);
+  assert.ok(Date.now() - started < 3_000, 'a 202 that arrives after the revert has finished is not an answer');
+  assert.equal(undone.json<{ transaction: { state: string } }>().transaction.state, 'reverting');
+
+  let state = '';
+  for (let i = 0; i < 200; i += 1) {
+    state = (await app.inject({ method: 'GET', url: `/api/transactions/${transaction.id}`, headers })).json<{ state: string }>().state;
+    if (state !== 'reverting') break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(state, 'reverted');
+});
+
 test('?wait=1 holds the request until the apply ends, as every apply did before', async (t) => {
   const { app, store, close, headers } = await device('apply-wait', { slowWritesMs: 300 });
   t.after(() => {

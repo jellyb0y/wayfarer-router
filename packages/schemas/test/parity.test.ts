@@ -576,8 +576,16 @@ test('an exempting mark removes a position from the required set and an unmarked
      * `subscription` 2 → 18: `/tunnels/-/derivedFrom/*` left (−2), and a member's `name`, `node`,
      * `protocol` and the fifteen leaves of its VLESS configuration joined — the feed writes them, so
      * none asks for a control.
+     *
+     * 128 → 129 on 2026-10-14: `/accessPoint/radio/wifi6` joined. A driver that reports HE for AP mode
+     * is not one that does it (docs/12-hardware-invariants.md), and only the owner can say whether the
+     * clients on this access point are better served with 802.11ax on.
+     *
+     * 129 → 130 on 2026-10-16: `/accessPoint/wpa3` joined. The built-in radio's driver lists the
+     * management-frame cipher and refuses its key, so the access point does not start with WPA3 on, and
+     * no report says so beforehand — only the owner can turn it off.
      */
-    { person: 128, generated: 8, device: 4, subscription: 18, catalogue: 1 },
+    { person: 130, generated: 8, device: 4, subscription: 18, catalogue: 1 },
     'the source distribution changed. That is not necessarily wrong, but it is never incidental: ' +
       'every entry here is a decision about whether a person must be given a control. Re-derive it ' +
       'and say in the diff which field moved and why.',

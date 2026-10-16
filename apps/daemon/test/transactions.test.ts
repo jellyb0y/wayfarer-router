@@ -34,6 +34,7 @@ import {
   unknown,
   type HealthReading,
 } from '../src/core/transactions.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 function store() {
   const database = openDatabase({ path: ':memory:' });
@@ -483,7 +484,7 @@ test('claims: a file we generated is never reported as another manager’s claim
   const { join } = await import('node:path');
   const { interfaceClaims, isOurs } = await import('../src/platform/facts.ts');
 
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-claims-'));
+  const directory = await scratchDir('wayfarer-claims-');
 
   // Ours: carries the header every generated file carries.
   await writeFile(
@@ -543,6 +544,35 @@ test('hostapd: the world domain omits country_code rather than writing a value h
   const real = build('DE');
   assert.match(real, /^country_code=DE$/m);
   assert.match(real, /^ieee80211d=1$/m);
+});
+
+test('hostapd: WPA3 and management-frame protection stay on unless the profile turns them off', async () => {
+  // Measured on the bench board, 2026-10-16: the built-in radio's driver lists the CMAC cipher and then
+  // refuses the management-frame key (`set_key default failed; err=-95`), so with these on its access
+  // point never starts. Off must drop both SAE and `ieee80211w`: SAE without protected frames is refused.
+  const { generateHostapd } = await import('../src/core/generate/hostapd.ts');
+  const { builtInAndDongle } = await import('./helpers/synthetic-inventory.ts');
+  const radio = builtInAndDongle().radios.find((entry) => entry.derived.canHostAccessPoint.value)!;
+  const build = (wpa3: boolean | undefined): string =>
+    generateHostapd({
+      profile: {
+        meta: { name: 'T' },
+        accessPoint: { radio: { band: '2.4GHz', channel: 1, width: 20, country: 'DE', hidden: false }, ssid: 'T', ...(wpa3 === undefined ? {} : { wpa3 }) },
+      } as never,
+      interfaceName: 'wlan1',
+      radio,
+      passphrase: 'a-passphrase',
+      channelFollowsUplink: false,
+    });
+
+  for (const config of [build(undefined), build(true)]) {
+    assert.match(config, /^wpa_key_mgmt=WPA-PSK SAE$/m);
+    assert.match(config, /^ieee80211w=1$/m);
+  }
+  const off = build(false);
+  assert.match(off, /^wpa_key_mgmt=WPA-PSK$/m);
+  assert.match(off, /^ieee80211w=0$/m);
+  assert.equal(/SAE|sae_/.test(off.replace(/^#.*$/gm, '')), false);
 });
 
 /* ── 802.11ax is the profile's choice, not the driver's ──────────────────────────────────── */

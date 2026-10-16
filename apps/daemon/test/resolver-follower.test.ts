@@ -14,8 +14,7 @@
 
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { emptyProfile, type ProfileDocument } from '@wayfarer/schemas';
@@ -25,6 +24,7 @@ import { readCapturedResolvers, watchCapturedResolvers } from '../src/platform/c
 import { tunnelDnsTag } from '../src/core/generate/core-config.ts';
 import { createObserverRegistry } from '../src/core/observers.ts';
 import type { ApplyOutcome } from '../src/core/apply.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 function hqProfile(): ProfileDocument {
   const base = emptyProfile({ name: 'Bench', now: () => '2026-09-22T00:00:00.000Z' }) as ProfileDocument;
@@ -62,7 +62,7 @@ async function board(): Promise<{
   failApply: { value: boolean };
   observers: ReturnType<typeof createObserverRegistry>;
 }> {
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-follower-'));
+  const root = await scratchDir('wayfarer-follower-');
   const captureDir = join(root, 'run-tunnel');
   const corePath = join(root, 'config.json');
   await mkdir(captureDir, { recursive: true });
@@ -253,7 +253,7 @@ test('a transaction left "applying" by a crash does not block the follower for e
 });
 
 test('an observer whose file-system watch could not be armed is a problem, and becomes ok when it arms', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-watch-'));
+  const root = await scratchDir('wayfarer-watch-');
   const directory = join(root, 'not-yet');
   const observers = createObserverRegistry();
   const observer = observers.register({ name: 'resolver-watch', watches: directory, everyMs: null });

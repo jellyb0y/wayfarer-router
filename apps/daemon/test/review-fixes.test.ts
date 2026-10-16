@@ -5,8 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat, writeFile, chown } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, stat, writeFile, chown } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { createListenerSet, type AddressReading, type ListenerHost } from '../src/api/listeners.ts';
@@ -15,6 +14,7 @@ import { openDatabase } from '../src/state/db.ts';
 import { createStore, SESSION_IDLE_SECONDS } from '../src/state/store.ts';
 import { parseIpRoutes, defaultRoute } from '../src/platform/parse/ip-json.ts';
 import { run } from '../src/platform/exec.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 function recordingHost(): ListenerHost & { started: string[]; stopped: string[]; fail: Set<string> } {
   const started: string[] = [];
@@ -95,7 +95,7 @@ test('listeners: an interface with no address is unresolved, and that is not an 
 });
 
 test('writeAtomic: a wrong owner is corrected, not reported as unchanged', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-own-'));
+  const directory = await scratchDir('wayfarer-own-');
   const target = join(directory, 'managed.conf');
   await writeAtomic(target, 'content\n', { mode: 0o640 });
 
@@ -122,7 +122,7 @@ test('writeAtomic: a wrong owner is corrected, not reported as unchanged', async
 });
 
 test('writeAtomic: a mode change alone is still a change', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-mode-'));
+  const directory = await scratchDir('wayfarer-mode-');
   const target = join(directory, 'managed.conf');
   await writeAtomic(target, 'x\n', { mode: 0o644 });
   assert.equal((await writeAtomic(target, 'x\n', { mode: 0o600 })).changed, true);

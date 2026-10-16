@@ -25,8 +25,6 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildServer, type ServerContext } from '../src/api/server.ts';
@@ -36,6 +34,7 @@ import { DEFAULT_CONFIG } from '../src/config.ts';
 import type { Platform } from '../src/platform/index.ts';
 import { createTelemetry, type LiveStatus } from '../src/telemetry/index.ts';
 import { aggregateTunnelStatus, type TunnelUnitReading } from '../src/core/tunnel-health.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
 /* ── the aggregate over a tunnel's units ─────────────────────────────────────────────────── */
 
@@ -384,7 +383,7 @@ async function statusBody(tunnels: LiveStatus['tunnels']): Promise<{
   body: Record<string, unknown>;
   close: () => void;
 }> {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-tunnel-status-'));
+  const directory = await scratchDir('wayfarer-tunnel-status-');
   const database = openDatabase({ path: join(directory, 'state.db') });
   const store: Store = createStore(database);
   await store.setAdminPassword('a-long-enough-password');
@@ -480,7 +479,7 @@ async function freshStore(): Promise<{
   database: ReturnType<typeof openDatabase>;
   close: () => void;
 }> {
-  const directory = await mkdtemp(join(tmpdir(), 'wayfarer-tunnel-store-'));
+  const directory = await scratchDir('wayfarer-tunnel-store-');
   const database = openDatabase({ path: join(directory, 'state.db') });
   return { store: createStore(database), database, close: () => database.close() };
 }

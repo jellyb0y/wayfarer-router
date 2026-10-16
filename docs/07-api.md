@@ -313,7 +313,9 @@ Now:
 * `POST /api/profiles/:id/activate?apply=1` is the selection **and** the apply as one transaction. The
   transaction records the profile that was active before (`activeProfileBefore`), and a revert of it — by a
   person, the deadline, or the traffic check — puts that selection back with the configuration. A plan refused
-  before anything changed puts it back at once.
+  before anything changed puts it back at once. So does a revert that **fails** (2026-10-15): on the bench
+  board on 2026-10-14 one failed at `wf-dhcp` and left the copy being undone named as active, so the next apply
+  would have reinstalled it; with the selection back, the next apply finishes the revert instead.
 * `POST /api/apply` and `activate?apply=1` answer the same way: see the next section.
 
 For `hot` and `service` classes the transaction comes back already `committed`. A `network` change comes back
@@ -338,6 +340,11 @@ because the client had no transaction id until it went looking. So:
   its row to `awaiting-confirm` before the reconcile, so a reader looking for `applying` — as the tunnel
   restart route and the rules watch did — misses exactly the dangerous one. The tunnel restart route, the rules
   watch, the device follower and the subscription refresh all ask the same predicate now.
+* **A revert answers the same way** (2026-10-15). Measured on the bench board, 2026-10-14: an operator revert
+  took 8 s and its request got no answer within the client's 120 s, because it was reconfiguring `end0`, the
+  link the answer had to leave by. `POST /api/transactions/:id/revert` now answers `202` with
+  `{ transaction: { id, state: "reverting" }, follow }` when it has not ended within `SYNC_GRACE_MS`; the row
+  moves to `reverted` or `failed`. `?wait=1` holds it as before.
 
 ### The traffic check inside a window (2026-10-14)
 

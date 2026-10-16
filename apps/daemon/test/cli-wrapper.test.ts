@@ -10,11 +10,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { chmod, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { scratchDir } from './helpers/scratch.ts';
 
 const run = promisify(execFile);
 
@@ -31,7 +31,7 @@ interface Ran {
  * names the installer creates as links to the wrapper.
  */
 async function stage(): Promise<{ hostapd: string; supplicant: string; sbin: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'wayfarer-wrapper-'));
+  const root = await scratchDir('wayfarer-wrapper-');
   const sbin = join(root, 'sbin');
   await run('mkdir', ['-p', sbin]);
   for (const tool of ['hostapd_cli', 'wpa_cli']) {

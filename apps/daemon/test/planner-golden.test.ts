@@ -1004,3 +1004,33 @@ test('every plan hands its tunnel units and its resolved surfaces to the caller'
   );
   assert.deepEqual(handed.surfaces, planned.plan.desired.managementSurfaces, 'the surfaces never left the pipeline');
 });
+
+/* ── a profile's name is not configuration ───────────────────────────────────────────────── */
+
+test('switching to a copy that differs only in its name finds nothing to do', () => {
+  // Measured on the bench board, 2026-10-14: activating such a copy rewrote the networkd drop-in
+  // because its header named the profile, which restarted systemd-networkd and reconfigured every link
+  // — the access point's included — for a change with no content. Mutation: put the name back into
+  // `generatedHeader` and this goes red with every generated file listed.
+  const scenario = SCENARIOS.find((entry) => entry.name === 'tunnels-routing-and-killswitch')!;
+  const inventory = INVENTORIES[scenario.inventory]!();
+  const planFor = (profile: ProfileDocument) =>
+    plan({
+      profile,
+      inventory,
+      facts: scenario.facts ?? cleanFacts(),
+      ...emissionsInput(profile),
+      managementPort: 8088,
+      timePorts: [123],
+      coreBinaryPath: '/usr/bin/sing-box',
+      upScriptPath: '/opt/wayfarer/bin/tunnel-up',
+      wayBinary: '/usr/local/bin/way',
+    });
+  const original = planFor(scenario.profile);
+  assert.equal(original.usable, true);
+  const copy = planFor({ ...scenario.profile, meta: { ...scenario.profile.meta, name: `${scenario.profile.meta.name} (copy)` } });
+
+  const switched = diff({ desired: copy.desired, reality: realityAfterApplying(original.desired, inventory) });
+  assert.deepEqual(switched.fileChanges.map((change) => `${change.action} ${change.path}`), []);
+  assert.equal(switched.empty, true);
+});

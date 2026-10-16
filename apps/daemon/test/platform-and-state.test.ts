@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat, writeFile, readdir } from 'node:fs/promises';
+import { readFile, stat, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,8 +19,9 @@ import { createStore, hashPassword, verifyPassword, EVENT_RING_SIZE, SESSION_IDL
 // device that has no development dependencies installed.
 import { unitIsHealthy, normaliseUnitState } from '../src/platform/parse/unit-state.ts';
 import { run, EmptyArgumentError } from '../src/platform/exec.ts';
+import { scratchDir } from './helpers/scratch.ts';
 
-const temp = async (): Promise<string> => await mkdtemp(join(tmpdir(), 'wayfarer-test-'));
+const temp = async (): Promise<string> => await scratchDir('wayfarer-test-');
 
 test('config: with no file the configured surfaces are loopback and nothing else', () => {
   /*
@@ -354,9 +355,9 @@ test('store: login history is pruned by count, so no clock step can delete evide
   database.close();
 });
 
-test('database: migrations apply once and refuse to downgrade', () => {
-  const directory = tmpdir();
-  const path = join(directory, `wayfarer-migrate-${Date.now()}.db`);
+test('database: migrations apply once and refuse to downgrade', async () => {
+  const directory = await scratchDir('wayfarer-migrate-');
+  const path = join(directory, 'state.db');
   const first = openDatabase({ path });
   const version = first.version();
   assert.ok(version >= 1);

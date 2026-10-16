@@ -847,6 +847,24 @@ export interface RevertOutcome {
   message: string;
 }
 
+/*
+ * An activate-and-apply also puts the selection back. This is not the pointer note in the revert, which is
+ * about an ordinary apply: there, moving the pointer would discard a person's edit. Here the pointer was
+ * moved by this very transaction, both profiles are still stored unchanged, and leaving it would make the
+ * device run one profile while naming the other as active — the next apply would install the one that
+ * was just reverted.
+ */
+function restoreActivation(deps: Pick<ApplyDeps, 'profiles' | 'store'>, id: string, before: string | null): void {
+  if (before === null || deps.profiles.get(before) === null) return;
+  deps.store.setActiveProfileId(before);
+  deps.store.recordEvent({
+    level: 'info',
+    kind: 'profile.activation-reverted',
+    summary: `the profile active before transaction ${id} is active again`,
+    detail: { transaction: id, activeProfileId: before },
+  });
+}
+
 /**
  * Re-applies the document this transaction was moving away from.
  *
@@ -1052,6 +1070,14 @@ export async function revertTransaction(deps: ApplyDeps, id: string, reason: str
       summary: `the revert of ${id} did not complete`,
       detail: { transaction: id, steps: result.steps },
     });
+    /*
+     * The selection goes back even though the revert did not finish. Measured on the bench board,
+     * 2026-10-14: a revert that failed at `wf-dhcp` left the copy being reverted named as active until
+     * it was re-activated by hand, so the next apply would have installed the very change being undone.
+     * With the selection back, the next apply completes the revert instead — its target is the document
+     * of that profile.
+     */
+    restoreActivation(deps, id, row.activeProfileBefore);
     // A revert that did not complete leaves the device in a state nobody has described. That is the
     // case most worth comparing, not the least, so the check runs on this path too.
     await transactionEnded(deps, id, 'revert-failed', 'after-failed-revert');
@@ -1070,22 +1096,7 @@ export async function revertTransaction(deps: ApplyDeps, id: string, reason: str
 
   deps.profiles.finishRevert(id);
 
-  /*
-   * An activate-and-apply also puts the selection back. This is not the pointer note below, which is about
-   * an ordinary apply: there, moving the pointer would discard a person's edit. Here the pointer was moved
-   * by this very transaction, both profiles are still stored unchanged, and leaving it would make the
-   * device run one profile while naming the other as active — the next apply would install the one that
-   * was just reverted.
-   */
-  if (row.activeProfileBefore !== null && deps.profiles.get(row.activeProfileBefore) !== null) {
-    deps.store.setActiveProfileId(row.activeProfileBefore);
-    deps.store.recordEvent({
-      level: 'info',
-      kind: 'profile.activation-reverted',
-      summary: `the profile active before transaction ${id} is active again`,
-      detail: { transaction: id, activeProfileId: row.activeProfileBefore },
-    });
-  }
+  restoreActivation(deps, id, row.activeProfileBefore);
 
   /**
    * What this device is running now, compared with what is stored — asked here because this is the
