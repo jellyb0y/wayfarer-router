@@ -335,9 +335,17 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
    * a list that contains it only when `tun0` already exists makes this file depend on whether the
    * core it configures is running.
    */
+  /*
+   * The served LAN likewise, whenever there is an access point to serve it. Measured on the bench board,
+   * 2026-10-16: the access point moved to another radio, the core configuration was generated before the
+   * new interface held `10.44.0.1`, and the list came out without `10.44.0.0/24` — the device then
+   * reported `config.diverged` and asked for a `network`-class core restart to add a network it had
+   * never stopped serving.
+   */
+  const servedNetwork = profile.accessPoint === null ? null : networkCidr(profile.network.cidr);
   const uplinkNetworks = [
     ...new Set(
-      [transferNetwork, ...observedNetworks].filter(
+      [transferNetwork, ...canonicalNetworks([...observedNetworks, ...(servedNetwork === null ? [] : [servedNetwork])])].filter(
         (cidr): cidr is string => cidr !== null,
       ),
     ),

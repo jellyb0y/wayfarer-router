@@ -363,6 +363,7 @@ purpose: the proxy core configuration
       {
         "ip_cidr": [
           "172.19.0.0/30",
+          "10.44.0.0/24",
           "192.0.2.0/24"
         ],
         "outbound": "direct"

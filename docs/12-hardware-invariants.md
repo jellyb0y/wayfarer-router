@@ -630,6 +630,12 @@ each failure was a fault of ours or of the driver, and each is recorded where it
 Held at 10:11 MSK: 5 GHz channel 36, 20 MHz, WPA2; `AP-ENABLED`, the traffic check passed 13 s into the window,
 a client associated within a minute.
 
+Afterwards the device reported `config.diverged`: the core configuration had been generated before `wfwan0`
+held `10.44.0.1`, so the destination-direct list derived from interface addresses lacked `10.44.0.0/24`, and
+the next plan was a `network`-class core restart to add it. No traffic was affected — the served LAN has its
+own direct rule — but the file depended on timing. The list now always carries the served LAN when there is an
+access point, as it already carried the transfer network (`core/generate/core-config.ts`). Not yet deployed.
+
 ## The card's device name is not stable across boots
 
 Measured on the bench board, 2026-09-21. The same physical SD card, the same image, two boots:
