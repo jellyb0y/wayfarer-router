@@ -29,6 +29,8 @@ export interface JournalQuery {
   afterCursor?: string;
   /** Hard cap, clamped to `maxLimit`. */
   limit?: number;
+  /** The kernel's messages (`-k`, this boot only) instead of the units'. */
+  kernel?: boolean;
 }
 
 export interface JournalResult {
@@ -95,6 +97,7 @@ export function createJournalReader(journalctlPath = JOURNALCTL, readTimeoutMs =
       const forward = cursor !== '';
 
       const args = ['-o', 'json', '--no-pager'];
+      if (query.kernel === true) args.push('-k');
       if (query.unit !== undefined && query.unit.trim() !== '') args.push('-u', query.unit.trim());
       if (query.maxPriority !== undefined) args.push('-p', String(Math.min(Math.max(query.maxPriority, 0), 7)));
       if (query.since !== undefined && query.since.trim() !== '') args.push('-S', query.since.trim());

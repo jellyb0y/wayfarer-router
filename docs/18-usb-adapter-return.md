@@ -63,6 +63,8 @@ reboot.
 
 ## Also pending on that day
 
-* The radio watchdog the owner approved on 2026-10-16: restart the access point when the radio stops moving
-  frames while hostapd says `ENABLED`, then reinitialise the USB device, and reboot only as a last resort.
+* The radio watch (`access-point-radio`, in place since 2026-10-17) covers the adapter from the moment it hosts
+  the access point. If the adapter hangs again, the event log shows `radio.restarted` and possibly
+  `radio.usb-rebound` — and the kernel lines are in the journal of that boot: copy them out before it
+  rotates, and check the priority they were logged at, which the watch assumes is `err`.
 * Every result above goes into [12-hardware-invariants.md](12-hardware-invariants.md) with its numbers and date.

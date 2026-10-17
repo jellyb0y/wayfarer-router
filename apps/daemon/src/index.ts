@@ -55,6 +55,7 @@ import { CLAIM_DIRECTORIES, CORE_CANDIDATES, devicePipeline } from './core/devic
 import { followDevice } from './core/device-follower.ts';
 import { observeAddresses } from './core/address-watch.ts';
 import { createObserverRegistry } from './core/observers.ts';
+import { watchAccessPointRadio } from './core/radio-watch.ts';
 import { watchPolicyRules } from './core/rules-watch.ts';
 import { refreshSubscriptions } from './core/subscription-refresh.ts';
 import { observeCapturedResolvers } from './core/resolver-watch.ts';
@@ -725,6 +726,18 @@ async function main(): Promise<void> {
   });
 
   /*
+   * The access point's radio, watched for going silent while everything above it reports health. See
+   * `core/radio-watch.ts`.
+   */
+  const radioWatch = watchAccessPointRadio({
+    observers,
+    platform,
+    applying: () => applyInFlight(profiles),
+    windowOpen: () => profiles.recentTransactions(5).some((row) => row.state === 'awaiting-confirm'),
+    record: (event) => store.recordEvent(event),
+  });
+
+  /*
    * The active profile's groups, refreshed from their subscriptions on their own `refreshHours`. See
    * `core/subscription-refresh.ts` for what an unattended refresh may and may not change.
    */
@@ -1161,6 +1174,7 @@ async function main(): Promise<void> {
     // leaves them is a process that will not exit when something else holds a handle too.
     resolverWatch.stop();
     rulesWatch.stop();
+    radioWatch.stop();
     subscriptionRefresh.stop();
     stopListeningForEnds();
     await stopTelemetry();

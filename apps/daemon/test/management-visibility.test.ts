@@ -105,6 +105,7 @@ function fakePlatform(): Platform {
     dns: { resolveWith: async () => ({ ok: false, detail: 'no network in this test' }) },
     scoped: {} as Platform['scoped'],
     install: {} as Platform['install'],
+    radio: { counters: async () => null, rebindUsb: async () => ({ ok: false as const, reason: 'no radio' }) },
     close: () => undefined,
   };
 }

@@ -38,6 +38,7 @@ import { createSupplicantController, type SupplicantController } from './supplic
 import { createSystemdController, type SystemdController } from './systemd.ts';
 import { createWifiReader, type WifiReader } from './wifi.ts';
 import { readSysctl, writeSysctl } from './facts.ts';
+import { counters as radioCounters, rebindUsb } from './radio-device.ts';
 
 export interface Platform {
   systemd: SystemdController;
@@ -99,6 +100,8 @@ export interface Platform {
   scoped: { spawn: typeof spawnScoped; scratch: typeof createScratch; freePort: typeof freeLoopbackPort };
   /** The installed bundle on disk, for an update. See `install-tree.ts`. */
   install: typeof installTree;
+  /** The access point's radio as a device: its packet counters, and a USB reset. See `radio-device.ts`. */
+  radio: { counters: typeof radioCounters; rebindUsb: typeof rebindUsb };
   close(): void;
 }
 
@@ -156,6 +159,7 @@ export function createPlatform(options: PlatformOptions): Platform {
       cacheDir: options.cacheDir,
       ...(options.coreBinary ? { coreBinary: options.coreBinary } : {}),
     }),
+    radio: { counters: radioCounters, rebindUsb },
     journal: createJournalReader(paths.journalctl),
     http: { fetchText },
     dns: { resolveWith },

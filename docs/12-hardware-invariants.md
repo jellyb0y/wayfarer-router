@@ -604,8 +604,17 @@ USB 2.0 link, the power budget, the 80 MHz width or the old firmware matters her
 change is left in place for days and the hang does not return.
 
 **The trap.** Every layer above the radio reported health: the unit was `active`, hostapd said `ENABLED` and
-listed a station, and nothing in Wayfarer looks at whether the radio actually moves frames. A device that is
+listed a station, and nothing in Wayfarer looked at whether the radio actually moves frames. A device that is
 "up" by every check it makes can be serving nobody for hours.
+
+**What was done (2026-10-17).** The `access-point-radio` observer (`core/radio-watch.ts`, events in
+`docs/07-api.md`) reads the radio itself: kernel errors from its device, hostapd's state, and the interface's
+packet counters while clients are listed. It restarts the access point, then — for a USB radio — unbinds and
+rebinds the device, then stops and reports. It does not reboot. Two choices in it rest on this incident: the
+kernel log is ignored for two minutes after each repair, because the 09:41 restart that fixed the radio itself
+logged `timed out waiting for pending tx`; and silence counts only with clients listed, because an idle access
+point's counters stand still honestly. That the hang's two lines were logged at priority `err` — what the
+observer filters on — is an assumption: the journal of that night had rotated away by 2026-10-17.
 
 ## The built-in radio as the access point: what it took (2026-10-16)
 

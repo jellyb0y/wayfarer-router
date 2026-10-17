@@ -488,6 +488,21 @@ address made the watchdog read `stale` for 51 s against a 30 s interval: a look 
 round **starts** as well as when it ends, so the longest gap is the longer of one interval and one
 round — a round that never ends still goes stale.
 
+**The access point radio** (`access-point-radio`, 2026-10-17, `core/radio-watch.ts`) watches each enabled
+`wf-hostapd@<iface>` for a radio that has gone silent while hostapd still says `ENABLED` — an error from the
+radio's own device in the kernel log, hostapd not enabled for two looks, or clients listed with no packet in or
+out for five minutes. Its events:
+
+| kind | level | when |
+|---|---|---|
+| `radio.restarted` | warn | the first rung: the access point's unit was restarted |
+| `radio.usb-rebound` | warn, error if the rebind failed | the second rung, USB radios only: the device was unbound from its driver and bound again |
+| `radio.unrecoverable` | error | both rungs done and still silent; nothing more is tried until it recovers, and it never reboots |
+| `radio.recovered` | info | after a rung, the access point is enabled with nothing wrong |
+
+It does nothing while an apply runs or a confirmation window is open, climbs at most once in ten minutes, and
+touches only the access point's unit and its radio — never the core, the tunnels or the routing rules.
+
 `GET /api/drift` serves the newest stored report **from any process** — the daemon's, or the one the
 timer's `way revert` wrote — with `checkedAt` (boot id and seconds since boot, the clock every process
 on the device shares) and `ageSeconds` computed from it; `null` age for a report from an earlier boot.
