@@ -240,6 +240,22 @@ way update --rollback             # or POST /api/system/update/rollback: back to
 5. **No answer: the kept bundle goes back** and is asked the same question. `state.json` and the event ring
    say which runs: `system.update-installed`, `system.update-rolled-back` or `system.update-failed`.
 
+**Measured from the panel on 2026-10-17, 23:12–23:16 UTC**, bench board, Settings → Software, signed in as the
+owner. The bundle was `0.0.0+4fd2a8e54a` built 09:14:07, signed with the owner's key, over the same commit
+built 09:10:51. The test ran install, then "Go back to the previous version", then install again. Each step
+took 10–13 s from `system.update-started` to the daemon answering, and the page reconnected by itself.
+`GET /api/system` `buildAt` read 09:14:07, then 09:10:51, then 09:14:07. Before and after each step, the
+`ActiveEnterTimestampMonotonic` of every `wf-*` unit was read. Only `wayfarer.service` changed: the core,
+the firewall, hostapd, the DHCP server and every tunnel kept their start time, and `table inet wayfarer`
+stayed loaded.
+
+**Trap: `state.json` does not say a rollback happened.** A requested rollback that succeeds writes
+`phase: "installed"`, the same as an update (`core/update.ts`, the `answers()` branch). Only the event ring says
+`system.update-rolled-back`. Its `from` and `to` come from `build.json`'s `version` alone, so two builds of
+one commit read `0.0.0+4fd2a8e54a → 0.0.0+4fd2a8e54a` either way. To tell which build runs, read
+`GET /api/system` `buildAt`, not the update record. The panel's card showed the right build each time
+because it reads `buildAt`.
+
 The API route verifies and stages, then starts `way update --staged` as a transient unit of its own
 (`systemd.runOnce`) and answers `202` — the installer must outlive the daemon it stops. It refuses while an
 apply runs or a window is open: the new daemon's start-up sweep would revert somebody's pending change.

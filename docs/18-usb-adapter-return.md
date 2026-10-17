@@ -54,16 +54,32 @@ The adapter came back with a heatsink at 15:42 UTC. Transaction `ef3a4fa1f573822
   `end0` included, and the request came in over `end0`. Following the transaction by id
   (`GET /api/transactions`) is what works; a lost answer is not a failed apply.
 
+* **The plan said `restart wf-firewall.service`, and the core restarted too.** `wf-core` started at
+  monotonic 118409.17 s, 0.57 s after `wf-firewall` (118408.60 s), and `wf-openvpn@collect-vpn` with it. The
+  chain on the board: `wf-core` has `Requires=wf-firewall-ready.target`, the target has
+  `Requires=wf-firewall.service`, and systemd propagates an explicit restart along `Requires=`.
+  `wf-openvpn@collect-vpn` is `PartOf=wf-core.service`. So every firewall restart is also a core restart,
+  and the plan does not say so. No traffic leaves outside the tunnel while this happens. The ruleset deletes
+  and recreates `table inet wayfarer` inside one `nft -f`, which is one transaction, and the unit has no
+  `ExecStop`. Clients lose connections through the core for the length of its restart. Making the plan name
+  this consequence is open.
+
 ### A trap found before applying: the inactive profile had gone stale
 
 The first plan for the original profile also rewrote `/etc/wayfarer/socks/claude-1.json` and restarted
 `wf-socks@claude-1`. Nothing about the radio explains that. A diff of the two stored documents showed why:
 while the copy was active, the subscription refresh of 2026-10-17 14:51 updated `claude-1`'s `realityShortId`
 in the copy, and the original kept the value from 2026-10-16. Its own last refresh, at 06:58 that day, had
-failed with "the refreshed profile does not plan" because the adapter had already been unplugged. Applying it
-as it stood would have put a node parameter the provider no longer serves back on a Claude tunnel. Traffic
-would not have left the tunnel, because the `claude` group has no `direct` member, but one of its two tunnels
-would have stopped working.
+failed with "the refreshed profile does not plan" because the adapter had already been unplugged.
+
+**Corrected the same night.** The first version of this paragraph said that applying the original would have
+put back "a node parameter the provider no longer serves", which would break a Claude tunnel. That conclusion
+was drawn from one difference, without asking whether the feed holds the value still. It does not: a manual
+refresh at 15:57:48 reported `updated claude-1` again, with no new node. The feed hands out a different
+`realityShortId` for that node on each read, so "stale" here means "from another read", not necessarily
+"refused by the server". Whether an older short id still connects was not tested: `claude-1` fails its test
+with either value (`504` through it, 2026-10-17 18:57). The reason for diffing before applying stands. The
+plan touched a Claude tunnel for a reason unrelated to the radio, and that is enough to stop and look.
 
 The fix was data, not code. The original's `groups` were replaced with the copy's through
 `PUT /api/profiles/:id`, with `{"$keep": true}` at every secret position. Before that, the stored secrets of
