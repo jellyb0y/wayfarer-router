@@ -6529,7 +6529,9 @@ drop-in, so activating a copy that differs only in its name rewrites
 which is what put `end0` and the access point through a reconfiguration in each of the tests above.
 **Changed 2026-10-15:** the header no longer names the profile (`generatedHeader` in
 `core/desired-state.ts`; `test/planner-golden.test.ts` asserts a rename-only switch plans nothing). The first
-apply after the update rewrites every generated file once, for the header alone.
+apply after the update rewrites every generated file once, for the header alone. **Verified on the board,
+2026-10-17:** a copy of the active profile differing only in its name, selected without applying, planned
+"nothing to do: the device already matches this profile" (class `hot`).
 
 ### Not verified on the board
 
