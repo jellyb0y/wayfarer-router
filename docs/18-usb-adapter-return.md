@@ -37,6 +37,52 @@ passphrase.
    If the access point does not come up, do nothing — the window reverts to the built-in radio by itself.
 5. Delete the temporary copy once the original has held for a day.
 
+## The switch as it ran (2026-10-17)
+
+The adapter came back with a heatsink at 15:42 UTC. Transaction `ef3a4fa1f5738228`, committed at 15:51.
+
+* **Cold, before the radio worked:** `mt7921_phy1` read **32 °C** (SoC sensors 46–48 °C). `txpower` could not
+  be read: the interface was `DOWN`, and `iw dev … info` prints no `txpower` for a down interface. It was not
+  brought up by hand to get the number.
+* **Right after `AP-ENABLED`:** **34 °C**, `channel 36, width 80 MHz`, **`txpower 3.00 dBm`**. Five clients
+  joined within the window; the traffic check `passed` in 288 ms. hostapd accepted the corrected `vht_capab`
+  with `[SU-BEAMFORMEE]`.
+* On plug-in the kernel logged `usb 2-1: device descriptor read/64, error -71` once, then enumerated the
+  adapter normally.
+* **The `POST /api/apply` answer never arrived** (client timeout at 60 s), while the transaction reached
+  `awaiting-confirm` on its own. The change set rewrote a networkd file, which reconfigures every managed link,
+  `end0` included, and the request came in over `end0`. Following the transaction by id
+  (`GET /api/transactions`) is what works; a lost answer is not a failed apply.
+
+### A trap found before applying: the inactive profile had gone stale
+
+The first plan for the original profile also rewrote `/etc/wayfarer/socks/claude-1.json` and restarted
+`wf-socks@claude-1`. Nothing about the radio explains that. A diff of the two stored documents showed why:
+while the copy was active, the subscription refresh of 2026-10-17 14:51 updated `claude-1`'s `realityShortId`
+in the copy, and the original kept the value from 2026-10-16. Its own last refresh, at 06:58 that day, had
+failed with "the refreshed profile does not plan" because the adapter had already been unplugged. Applying it
+as it stood would have put a node parameter the provider no longer serves back on a Claude tunnel. Traffic
+would not have left the tunnel, because the `claude` group has no `direct` member, but one of its two tunnels
+would have stopped working.
+
+The fix was data, not code. The original's `groups` were replaced with the copy's through
+`PUT /api/profiles/:id`, with `{"$keep": true}` at every secret position. Before that, the stored secrets of
+both documents were compared on the board by hash, and all 17 were equal. The next plan no longer touched
+`claude-1`.
+
+**Rule for every switch back to a profile that sat inactive:** read its plan, and if it touches anything the
+switch is not about, diff the stored documents before applying. Refreshes write only to the active profile.
+
+### What this settles about 3 dBm
+
+The figure is there **at 34 °C**, a minute after the radio started. **Explanation 2 (thermal back-off) is
+ruled out** as the cause of the figure itself: it does not wait for heat.
+
+Explanation 3 does not match the board as it is now either. `iw reg get` lists only `phy#0`, the built-in radio,
+as self-managed with domain `00`. The adapter (`phy1`) follows the global `DE`, and its channel 36 limit is
+23 dBm (`iw phy phy1 info`). That leaves explanation 1, a reporting artefact, or something in how the driver
+applies the limit. Client-side RSSI is the test that is still open.
+
 ## What to measure afterwards
 
 | Question | How | Pass |
