@@ -21,6 +21,7 @@
 | [15-bench-safety-net.md](15-bench-safety-net.md) | The deadman that makes breaking a board recoverable |
 | [16-implementation-notes.md](16-implementation-notes.md) | **The catalogue.** Traps found while building, and the failure modes to look for next |
 | [17-publishing.md](17-publishing.md) | What has to be true before this is made public |
+| [18-usb-adapter-return.md](18-usb-adapter-return.md) | Putting the USB adapter back on the access point, and what to measure when it is |
 
 Supporting research is in [research/](research/).
 
