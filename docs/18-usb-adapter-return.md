@@ -89,6 +89,12 @@ both documents were compared on the board by hash, and all 17 were equal. The ne
 **Rule for every switch back to a profile that sat inactive:** read its plan, and if it touches anything the
 switch is not about, diff the stored documents before applying. Refreshes write only to the active profile.
 
+* **A day later (2026-10-19 09:37 MSK):** hostapd still running since the switch, about 39 h. The adapter reads
+  **34 °C** with five clients after 24.9 GB sent and 2.6 GB received (`statistics/{tx,rx}_bytes`). The SoC
+  reads 41–42 °C. No `mt7921u … timeout` line is in the kernel log since the plug-in, and the radio watch has
+  not acted. `txpower` still reads 3.00 dBm. The temporary copy `684f1e7e079408a3` was deleted. The plan for
+  the active profile is empty, and drift shows no findings.
+
 ### What this settles about 3 dBm
 
 The figure is there **at 34 °C**, a minute after the radio started. **Explanation 2 (thermal back-off) is
