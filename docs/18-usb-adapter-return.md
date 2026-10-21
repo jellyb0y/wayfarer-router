@@ -105,6 +105,55 @@ as self-managed with domain `00`. The adapter (`phy1`) follows the global `DE`, 
 23 dBm (`iw phy phy1 info`). That leaves explanation 1, a reporting artefact, or something in how the driver
 applies the limit. Client-side RSSI is the test that is still open.
 
+### The adapter stops sending beacons while data still flows (2026-10-20/21)
+
+**Symptom.** From 2026-10-19 15:40 MSK the owner reported Wi-Fi dropping "for a few minutes", mostly on Apple
+devices, once also on the PlayStation. On the board nothing was wrong. hostapd had run without a restart since
+2026-10-17 18:49, and the kernel logged no error. hostapd never deauthenticated a client: every rejoin was
+started by the client. DHCP answered at once, and the core and the `germany` tunnel showed no gap in traffic.
+The radio watch did not act, and could not have: interface packet counters kept moving throughout.
+
+**The client says why.** The owner's MacBook (`cc:08:fa`) is a client of this access point, and its unified
+log records the reason for every link loss (`/usr/bin/log show`, process `kernel`). All three of its drops in
+four days start the same way:
+
+```
+04:36:11.942 kernel: handleLink: f/w reason = 1 Link down because of beacon loss
+04:36:12.001 kernel: leaveNetworkCommand: ask to leave network due to <link down indication> isDisconnectInVoluntary=<1>
+```
+
+Its link-quality reports from `airportd`, every 5 s, count the beacons received from its own BSS
+(`rxBeaconMbss`) and the unicast data frames from it (`rxDataUcastMbss`). At a 100 TU beacon interval the
+normal count is about 50 beacons per 5 s, and that is what they show for hours. Around each drop:
+
+| Drop | Beacons per 5 s | Data frames per 5 s in the same reports | Link quality just before |
+|---|---|---|---|
+| 2026-10-20 17:11 | 18, then 0–2 for 30 s (17:10:32–17:11:02) | 63–104 | |
+| 2026-10-20 21:48 | 35–40, then 15, then disconnect | 86 | |
+| 2026-10-21 04:36 | 35, 6, 1, then 0 for 15 s (04:35:53–04:36:08) | 51 at 04:35:58 | RSSI −69 dBm, noise −90, SNR 28, CCA 8 %, `txFail=0` |
+
+**Finding.** The adapter stops transmitting beacons for 15–30 s while it keeps transmitting data to the same
+client. The client then leaves on beacon loss. The other Apple devices drop at the same second. After the
+rejoin the count returns to about 50. What restarts the beacons was not established. It happens without any
+action on the board, within about a minute.
+
+**Corrected the same night.** Before this was measured, the explanation offered to the owner was a weak link:
+clients near the board show −72 to −78 dBm at the access point with MCS 4–6, and a metal heatsink over the
+adapter was named as a possible cause. The client-side numbers contradict it. The link is clean right up to
+the moment the beacons stop, and data keeps arriving after. Signal level as the board reports it was the wrong
+metric; the client's beacon count is the right one.
+
+**What rules out the easy causes on the board.** `runtime-pm` 0, doze time 0, and USB autosuspend off
+(`power/control` = `on`) on phy1 (`/sys/kernel/debug/ieee80211/phy1/mt76/`). Kernel `6.18.49-current-sunxi64`.
+
+**Why the radio watch is blind to it.** The watch reads kernel errors and interface packet counters. Beacons
+are sent by the adapter's firmware and appear in neither, and data keeps flowing. Detecting this on the board
+needs a receiver that counts the access point's beacons over the air. That could be the built-in radio, which
+is idle and supports channel 36, in monitor mode. Not built; recorded as the gap.
+
+**Open.** Whether the PlayStation's drop at 2026-10-20 19:58:04 (12 s, rejoined by itself) is the same event
+was not established: it logs nothing the board can read.
+
 ## What to measure afterwards
 
 | Question | How | Pass |
