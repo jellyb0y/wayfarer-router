@@ -248,7 +248,42 @@ was not relied on to take `mt76_usb` with it.
 As it ran: file written at 15:53:07, access point `ENABLED` at 15:53:12,
 `/sys/module/mt76_usb/parameters/disable_usb_sg` = `Y`, firmware still 20260224, no kernel error.
 
-**Result.** Pending: stalls over the next hours, against one to three per hour before.
+**Result: not cured.** The next stall began at 15:59:09, six minutes later: own beacons 0–3 per 5 s until
+15:59:59 while other networks were heard at 77–117. The client stayed associated (no `beacon loss` line in its
+log); a single report at 15:59:34 with every counter at 0 was the client off channel, not a disconnect, and was
+first misread as one. Both settings are still in place on the board.
+
+### Another channel (2026-10-21 16:27)
+
+**Why.** Wayfarer does not choose the channel: `accessPoint.radio.channel` is a fixed number in the profile, and
+hostapd is not run with automatic selection. A scan from the client at 16:10 (`system_profiler
+SPAirPortDataType`) listed three other networks at 80 MHz on 40, 44 and 48 — the same 80 MHz block as this
+access point on 36 — and none in 149–161. The regulatory rules on the board (`iw reg get`, DE) allow 149–165
+without radar detection at 13 dBm; the adapter transmits at 3 dBm anyway.
+
+**A bug found on the way.** The first apply of channel 149 at 80 MHz reverted by itself. `centreChannel` in
+`core/generate/hostapd.ts` counted the 5 GHz groups from 36 all the way up, but the plan steps from 144 to 149,
+so it wrote `vht_oper_centr_freq_seg0_idx=154` instead of 155. hostapd stopped at `Interface initialization
+failed` right after `HT_SCAN`, the address service failed with it, the traffic check failed, and the window
+reverted (transaction `8d8cf2fa40bb6b13`). The golden file for the channel-149 scenario had recorded the wrong
+centre, so no test caught it. Fixed by counting the upper groups from 149, with a test of the centres and a
+check that the test fails on the old formula; deployed as `5929c5d`.
+
+**Trap: the generated hostapd file names the phy.** Its header carries `# Radio: phyN`. After the two driver
+reloads above the adapter was `phy3`, so the plan showed the file as changed and wanted to restart the access
+point although nothing in the profile had changed. Harmless here, because the channel change rewrote the file
+anyway; a reload alone would have shown up as drift.
+
+**As it ran.** Second apply (`ec15607dd9610703`): window open at 16:27:03 with the traffic check `passed` and
+the access point `ENABLED` on 149, confirmed at 16:27:05. `iw dev` shows `channel 149 (5745 MHz), width: 80 MHz,
+center1: 5775 MHz`. Within a minute five of six clients were back: both iPhones, both Macs and the Yandex
+Station Max. The PlayStation (`c8:4a:a0`) was not.
+
+**Measuring on a quiet channel.** With few neighbours the client hears few other beacons, so "other networks
+heard" stops telling whether it was on channel. A report also counts as trusted when it carries data frames from
+this access point (`rxDataUcastMbss` ≥ 20): data arriving with no beacons is the stall itself.
+
+**Result.** Pending.
 
 ## What to measure afterwards
 
