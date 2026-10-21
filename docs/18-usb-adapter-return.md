@@ -213,11 +213,11 @@ tried here: the owner recalls the PlayStation dropping with it on.
 
 ### Newer firmware (2026-10-21 15:16)
 
-`deploy/mt7921-firmware.sh install <ap-interface>` places the patch and RAM code from linux-firmware commit
+`deploy/mt7921-radio.sh firmware-install <ap-interface>` places the patch and RAM code from linux-firmware commit
 `ced02591a802` (2026-03-13, build 20260224, checksums pinned in the script) in `/lib/firmware/updates/mediatek`,
 reloads the driver, and restarts the access point units, which are bound to the interface and stay down
 otherwise. If the access point is not `ENABLED` within the deadline it removes the files and reloads again;
-`remove` does the same on request. It is not part of the installer: it is a hardware-specific experiment and
+`firmware-remove` does the same on request. It is not part of the installer: it is a hardware-specific experiment and
 stays opt-in until the result is known. Run detached (`systemd-run`), because the ssh session may be riding
 the access point it reloads.
 
@@ -234,8 +234,21 @@ the same day. The 200 MB runtime budget is filled by the core's access log (one 
 connection, unit `wf-socks@germany`), so an incident from the previous evening is already gone from the board
 by morning. The client-side log above is what survived. Not changed here.
 
-**Result.** Pending: the same count of stalls over several hours, against roughly one to three per hour
-before.
+**Result: not cured.** Seven minutes later the same stall: 15:22:56–15:24:46, own beacons 1–13 per 5 s while
+other networks were heard at 82–169. The new firmware is kept while the next candidate is tried, so that only
+one setting changes at a time.
+
+### `disable_usb_sg=1` (2026-10-21 15:53)
+
+`deploy/mt7921-radio.sh sg-disable <ap-interface>` writes `options mt76_usb disable_usb_sg=1` to
+`/etc/modprobe.d/wayfarer-mt76-usb.conf` and reloads the driver down to `mt76_usb`; `sg-restore` removes the
+file and reloads. The explicit unload is there because `modprobe -r -n -v mt7921u` lists only `mt7921u`, so it
+was not relied on to take `mt76_usb` with it.
+
+As it ran: file written at 15:53:07, access point `ENABLED` at 15:53:12,
+`/sys/module/mt76_usb/parameters/disable_usb_sg` = `Y`, firmware still 20260224, no kernel error.
+
+**Result.** Pending: stalls over the next hours, against one to three per hour before.
 
 ## What to measure afterwards
 
