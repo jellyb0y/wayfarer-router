@@ -148,11 +148,94 @@ metric; the client's beacon count is the right one.
 
 **Why the radio watch is blind to it.** The watch reads kernel errors and interface packet counters. Beacons
 are sent by the adapter's firmware and appear in neither, and data keeps flowing. Detecting this on the board
-needs a receiver that counts the access point's beacons over the air. That could be the built-in radio, which
-is idle and supports channel 36, in monitor mode. Not built; recorded as the gap.
+needs a receiver that counts the access point's beacons over the air. Not built; recorded as the gap.
+
+*Corrected 2026-10-21:* this paragraph first named the built-in radio in monitor mode as that receiver. It
+cannot be: `iw phy phy0 info` lists no monitor interface type, and a passive scan on it
+(`iw dev wfwan0 scan freq 5180 passive`) hung for more than two minutes and had to be killed. The claim was
+made from "idle and supports channel 36" without reading the interface modes.
 
 **Open.** Whether the PlayStation's drop at 2026-10-20 19:58:04 (12 s, rejoined by itself) is the same event
 was not established: it logs nothing the board can read.
+
+### How often, and what does not end it (2026-10-21)
+
+Measured from the same MacBook's `airportd` reports, read live by a script on the Mac. A report is counted
+only when the Mac also heard other networks' beacons (`rxBeaconObss` ≥ 25 per 5 s); below that the Mac itself
+was off channel or asleep, and its own-BSS count means nothing.
+
+**Stalls.** Between 13:00 and 14:40 there were five, each with other networks heard at 90–145 beacons per 5 s
+and this access point at 0–5:
+
+| Start | Length |
+|---|---|
+| 13:02:14 | ~50 s |
+| 13:37:28 | ~60 s |
+| 13:58:27 | ~25 s |
+| 14:19:36 | ~60 s |
+| 14:34:23 | ~2 min, with short recoveries to 10–20 |
+
+Over the 22 h before, 28 stalls longer than 15 s were counted in the same reports. Nothing on the board changes
+around them: no kernel message, no hostapd event, the mt76 queue heads, `acq` and BA-miss counters
+(`/sys/kernel/debug/ieee80211/<phy>/mt76/`) read every 2 s show no step.
+
+**Re-sending the beacon template does not end a stall.** The mt7921 driver hands beacons to the firmware as a
+template (`UNI_BSS_INFO_BCN_CONTENT`), resent on `BSS_CHANGED_BEACON`. `hostapd_cli update_beacon` triggers
+exactly that: tracepoint `mac80211:drv_link_info_changed` showed `changed:0x100` for it. The script ran it
+over ssh whenever a trusted report showed ≤ 12 beacons, at most every 20 s; data still flows during a stall,
+so the command reached the board each time (`OK`, 1.4–1.7 s). It fired 3, 4, 2, 3 and 5 times in the five
+stalls above, and the next reports stayed at 0–5 every time; each stall lasted as long as the unattended ones
+before. So the firmware is not missing the template; it is not transmitting. A periodic beacon refresh in
+the radio watch is therefore not a repair, and was not built. Whether the repeated commands lengthened the
+2-minute stall was not established.
+
+**The steady deficit is a different thing, and smaller.** Outside stalls the count averages 44–46 against
+~49, falling as the client's own traffic rises (trusted reports, 22 h):
+
+| Data frames per 5 s | Mean beacons per 5 s |
+|---|---|
+| < 50 | 46.1 |
+| 50–200 | 45.7 |
+| 200–1000 | 44.6 |
+| ≥ 1000 | 42.3 |
+
+Whether the beacons are late at the adapter or missed by a busy client was not established. `update_beacon`
+fired on this deficit (mean of six reports < 44) did not change it either. It was first reported to the owner
+as "about 20 % of beacons lost" from one morning hour; the day-long figure is 6–8 %.
+
+**What others report.** No public report matches stalls of this length with data flowing (searched
+2026-10-21). The closest setup is openwrt/mt76 issue 1141 (kernel 6.18.50, channel 36, VHT80), where the
+adapter dies outright. The driver's beacon path has not changed since 2022. linux-firmware has nine releases
+of `WIFI_RAM_CODE_MT7961_1.bin` after the 20230526 build in the distribution package, without release notes;
+one (2026-03) is reported to fix a 6 GHz access point that sent no beacons at all on the 2025 builds. Single
+reports name `disable_usb_sg=1` on `mt76_usb` and enabling 802.11ax as having helped beaconing. 802.11ax is not
+tried here: the owner recalls the PlayStation dropping with it on.
+
+### Newer firmware (2026-10-21 15:16)
+
+`deploy/mt7921-firmware.sh install <ap-interface>` places the patch and RAM code from linux-firmware commit
+`ced02591a802` (2026-03-13, build 20260224, checksums pinned in the script) in `/lib/firmware/updates/mediatek`,
+reloads the driver, and restarts the access point units, which are bound to the interface and stay down
+otherwise. If the access point is not `ENABLED` within the deadline it removes the files and reloads again;
+`remove` does the same on request. It is not part of the installer: it is a hardware-specific experiment and
+stays opt-in until the result is known. Run detached (`systemd-run`), because the ssh session may be riding
+the access point it reloads.
+
+As it ran: files placed at 15:16:40, access point `ENABLED` at 15:16:44, kernel log
+`HW/SW Version … Build Time: 20260224110909a` and `WM Firmware Version: ____010000, Build Time: 20260224110949`,
+6 of 7 clients back within a minute, no kernel error.
+
+**Trap: the phy number is not stable.** After the reload the adapter came back as `phy2`, not `phy1`.
+Anything that addresses the radio by phy number — a debugfs path, a script — silently reads nothing. Address it
+through the interface (`/sys/class/net/<iface>/phy80211`).
+
+**Trap: the board's journal holds about seven hours.** On 2026-10-21 at 10:40 the oldest entry was from 03:41
+the same day. The 200 MB runtime budget is filled by the core's access log (one `accepted` line per
+connection, unit `wf-socks@germany`), so an incident from the previous evening is already gone from the board
+by morning. The client-side log above is what survived. Not changed here.
+
+**Result.** Pending: the same count of stalls over several hours, against roughly one to three per hour
+before.
 
 ## What to measure afterwards
 
