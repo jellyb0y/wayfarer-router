@@ -271,10 +271,17 @@ function vhtChannelWidth(width: number): number {
  *
  * Derived arithmetically from the primary channel rather than from a table, because a table of
  * channel groups is a table describing a regulatory domain, and those differ.
+ *
+ * The groups restart at 149: the 5 GHz plan steps from 144 to 149, not to 148, so counting from 36
+ * all the way up put every upper group one channel low. Measured on the bench board, 2026-10-21: a
+ * profile asking for channel 149 at 80 MHz was written as `vht_oper_centr_freq_seg0_idx=154`, hostapd
+ * stopped at `Interface initialization failed` right after `HT_SCAN`, and the window reverted. The
+ * centre of 149–161 is 155.
  */
 export function centreChannel(primary: number, width: number): number {
   const channelsWide = width / 20;
   const groupSize = channelsWide * 4;
-  const base = Math.floor((primary - 36) / groupSize) * groupSize + 36;
+  const origin = primary >= 149 ? 149 : 36;
+  const base = Math.floor((primary - origin) / groupSize) * groupSize + origin;
   return base + (channelsWide - 1) * 2;
 }

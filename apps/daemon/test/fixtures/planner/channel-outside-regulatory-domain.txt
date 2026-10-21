@@ -360,7 +360,7 @@ ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40][TX-STBC][RX-STBC1][DSSS_CCK-40]
 ieee80211ac=1
 vht_capab=[MAX-MPDU-7991][RXLDPC][SHORT-GI-80][SU-BEAMFORMEE]
 vht_oper_chwidth=1
-vht_oper_centr_freq_seg0_idx=154
+vht_oper_centr_freq_seg0_idx=155
 
 # WPA2 and WPA3 together with CCMP only: TKIP caps the whole network at 54 Mbit/s and is
 # broken. sae_require_mfp with the mixed mode lets a WPA3 client get management-frame
