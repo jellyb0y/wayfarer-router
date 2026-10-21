@@ -283,7 +283,16 @@ Station Max. The PlayStation (`c8:4a:a0`) was not.
 heard" stops telling whether it was on channel. A report also counts as trusted when it carries data frames from
 this access point (`rxDataUcastMbss` ≥ 20): data arriving with no beacons is the stall itself.
 
-**Result.** Pending.
+**Result: no stall in three hours.** From 16:27:05 to 19:28:18 the client logged 1807 reports, own beacons
+44.4 per 5 s on average. 28 reports were at 5 or fewer, and every one stood alone between normal reports on
+either side, spaced two to four minutes apart: the client's own background scans, not the access point. No two
+low reports in a row, and no `beacon loss` or `leaveNetwork` in the client's log
+(`/usr/bin/log show --start "2026-10-21 16:27:00" --predicate 'process == "airportd"'`). On 36 the stalls had
+come back within six and seven minutes of each of the two earlier changes.
+
+This points at the shared 80 MHz block on 36–48, not at the adapter, the firmware or USB. It is not proof:
+three hours is one evening, and the newer firmware and `disable_usb_sg=1` are still on the board, so the
+result belongs to the three together. Whether either is needed on 149 is untested.
 
 ## What to measure afterwards
 
