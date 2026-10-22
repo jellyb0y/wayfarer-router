@@ -294,6 +294,35 @@ This points at the shared 80 MHz block on 36–48, not at the adapter, the firmw
 three hours is one evening, and the newer firmware and `disable_usb_sg=1` are still on the board, so the
 result belongs to the three together. Whether either is needed on 149 is untested.
 
+## The firmware hang of 2026-10-22, 19:28
+
+A different failure from the beacon stalls: everything stopped, not only beacons. Channel 149, firmware
+20260224, `disable_usb_sg=1`, adapter at 36 °C, load 0.47, 1.5 GB free, runtime-pm and USB autosuspend off.
+
+| Time | What | Source |
+|---|---|---|
+| 19:28:50 | every listed client goes silent at once; `rx_packets` stops at 12370693 and does not move again | `inactive_msec` 171908–177128 for all five at 19:31:40; sysfs counters |
+| 19:28–19:29 | proxied connections fall from 116 a minute to the 23–28 the board makes itself | `journalctl`, `accepted` lines per minute |
+| to 19:34:06 | `tx_packets` creeps up about one a second, nothing received, nothing in the kernel log, hostapd `ENABLED` with five clients, the device still on the bus | `iw`, `hostapd_cli`, `lsusb -t` |
+| 19:34:06 | hostapd drops `6e:ab:ba` for 300 s of inactivity | hostapd journal |
+| 19:34:10 | `Message 00020003 (seq 3) timeout`, then `timed out waiting for pending tx`, a `kthread_park` warning in `mt76u_stop_tx` from `mt7921u_mac_reset`, and the firmware reloaded | kernel journal |
+| 19:34:31 | the radio watch restarts `wf-hostapd@` on the kernel errors; clients rejoin | observer `lastActed` |
+
+**What it shows.** The firmware stopped both the data path and its command channel while the device's USB
+side stayed enumerated. The driver noticed only when it next had to ask the firmware something: removing a
+station is a firmware command, and it was the first in five minutes. No ssh session to the board ran between
+19:32:33 and 19:36:33, so nothing from outside prompted it. The same lines after a speed test on the same
+chip are reported in an OpenWrt forum thread, "mt7921u AP mode crashes on 23.05.0"; that thread is not a
+measurement of this board. Not established: what inside the firmware stops, and what triggers it — the owner
+reports no speed test or other unusual load at 19:28.
+
+**Correction.** In the moment the 19:34:31 restart was taken for a manual one. It was the watch's; the manual
+restart came at 19:36:36, with the radio already back, and only made the clients rejoin a second time.
+
+**Why the watch took 5 min 40 s.** It fired on the kernel errors, not on the silence. Its silence rule wanted
+neither counter to move for five minutes, and `tx_packets` kept moving. The rule now judges received packets
+alone, for a minute.
+
 ## What to measure afterwards
 
 | Question | How | Pass |

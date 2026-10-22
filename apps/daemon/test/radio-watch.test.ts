@@ -147,7 +147,7 @@ test('a built-in radio has no USB rung', async () => {
   assert.deepEqual(b.events.map((event) => event.kind), ['radio.restarted', 'radio.unrecoverable']);
 });
 
-test('silence without clients is not a fault; silence with clients for five minutes is', async () => {
+test('silence without clients is not a fault; silence with clients for a minute is', async () => {
   const b = bench();
   for (let i = 0; i < 12; i += 1) {
     await b.watch.check();
@@ -165,16 +165,30 @@ test('silence without clients is not a fault; silence with clients for five minu
   assert.deepEqual(b.calls, ['restart wf-hostapd@wlx90de8047b4b4.service']);
 });
 
-test('frames moving with clients connected is health', async () => {
+test('frames received with clients connected is health', async () => {
   const b = bench();
   b.state.stations = 3;
   await b.watch.check();
   for (let i = 0; i < 20; i += 1) {
-    b.state.tx += 5;
-    b.advance(60_000);
+    b.state.rx += 5;
+    b.advance(30_000);
     await b.watch.check();
   }
   assert.deepEqual(b.calls, []);
+});
+
+test('frames still being sent do not hide a radio that receives nothing', async () => {
+  // Measured on 2026-10-22: from 19:28:50 the adapter received nothing while hostapd handed it about one
+  // frame a second, and the kernel stayed quiet until 19:34:10.
+  const b = bench();
+  b.state.stations = 5;
+  await b.watch.check();
+  for (let i = 0; i < 3; i += 1) {
+    b.state.tx += 30;
+    b.advance(30_000);
+    await b.watch.check();
+  }
+  assert.deepEqual(b.calls, ['restart wf-hostapd@wlx90de8047b4b4.service']);
 });
 
 test('an unreadable hostapd status is not a down access point while its unit runs', async () => {

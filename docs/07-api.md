@@ -490,8 +490,9 @@ round — a round that never ends still goes stale.
 
 **The access point radio** (`access-point-radio`, 2026-10-17, `core/radio-watch.ts`) watches each enabled
 `wf-hostapd@<iface>` for a radio that has gone silent while hostapd still says `ENABLED` — an error from the
-radio's own device in the kernel log, hostapd not enabled for two looks, or clients listed with no packet in or
-out for five minutes. Its events:
+radio's own device in the kernel log, hostapd not enabled for two looks, or clients listed with no packet
+received for a minute. Until 2026-10-22 the last rule wanted no packet in *or out* for five minutes; it never
+fired on a hung adapter that still had frames handed to it to send (`docs/18-usb-adapter-return.md`). Its events:
 
 | kind | level | when |
 |---|---|---|

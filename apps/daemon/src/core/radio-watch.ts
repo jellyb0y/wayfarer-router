@@ -16,8 +16,16 @@
  *   above were logged at `err` is an assumption: the journal of that night had rotated away by the time
  *   this was written.
  * * **hostapd not `ENABLED`** for two looks in a row while its unit is enabled.
- * * **Clients listed and no packet in or out for {@link SILENT_WITH_CLIENTS_MS}.** Without clients an
- *   access point's counters honestly stand still, so silence alone proves nothing.
+ * * **Clients listed and no packet in for {@link SILENT_WITH_CLIENTS_MS}.** Without clients an access
+ *   point's counters honestly stand still, so silence alone proves nothing. Only the receive side is
+ *   judged: on 2026-10-22 the same adapter received nothing from 19:28:50 while hostapd still handed it
+ *   about one frame a second to send, so `tx_packets` kept moving and a rule that wanted both counters
+ *   still never fired. The kernel said nothing either until 19:34:10, when hostapd dropped a client for
+ *   inactivity and the driver's first command to the firmware in five minutes timed out — the radio was
+ *   down 5 min 40 s, nearly all of it spent waiting. The minute is from 13 h of per-second counters
+ *   (2026-10-21 11:25 to 2026-10-22 00:44, five to six clients): received packets never stood still for
+ *   even 10 s while a client was listed. Those hours always had an awake client — one of them was the
+ *   machine recording the counters — so that a quieter night stays above a minute is an assumption.
  *
  * ## What it does
  *
@@ -36,7 +44,7 @@ import type { Platform } from '../platform/index.ts';
 import type { ObserverRegistry } from './observers.ts';
 
 export const RADIO_WATCH_CHECK_MS = 30_000;
-export const SILENT_WITH_CLIENTS_MS = 5 * 60_000;
+export const SILENT_WITH_CLIENTS_MS = 60_000;
 /** How long a rung is given before it is judged — and before the kernel log is believed again. */
 export const REPAIR_SETTLE_MS = 2 * 60_000;
 /** Between one climb of the ladder and the next. */
@@ -128,8 +136,7 @@ export function watchAccessPointRadio(input: {
     const stations = (status?.bss ?? []).reduce((sum, bss) => sum + (bss.stationCount ?? 0), 0);
 
     const counters = await platform.radio.counters(target.iface);
-    const moved =
-      counters === null || target.counters === null || counters.txPackets !== target.counters.txPackets || counters.rxPackets !== target.counters.rxPackets;
+    const moved = counters === null || target.counters === null || counters.rxPackets !== target.counters.rxPackets;
     target.counters = counters;
     target.silentSince = !enabled || stations === 0 || moved ? null : (target.silentSince ?? at);
 
@@ -143,7 +150,7 @@ export function watchAccessPointRadio(input: {
             ? `${target.unit} is not running`
             : `hostapd reports ${status.state ?? 'no state'} rather than ENABLED`
           : target.silentSince !== null && at - target.silentSince >= SILENT_WITH_CLIENTS_MS
-            ? `${String(stations)} client(s) listed and no packet in or out for ${String(Math.round((at - target.silentSince) / 60_000))} min`
+            ? `${String(stations)} client(s) listed and no packet received for ${String(Math.round((at - target.silentSince) / 1_000))} s`
             : null;
 
     // Not yet judged down, and not up either: neither a fault nor a recovery. Declaring recovery here
