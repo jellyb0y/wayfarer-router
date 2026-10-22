@@ -360,7 +360,7 @@ reboot.
 (counters, the USB device's URB count, the driver's host-side queues, temperature, every client's inactivity and
 signal) and the usbmon text trace of the radio's bus. When clients are listed and nothing has been received for
 20 s — before the watch's minute — it writes one `.tgz` to `/var/lib/wayfarer/blackbox`, and a second once
-packets flow again; the newest 20 are kept. Sizes, measured or derived from 527 URBs a second on 2026-10-22:
-about 20 MB of memory, nothing on the card in normal running, a few MB per record. One sample took 48 ms on the
+packets flow again; the newest 20 are kept, none older than 14 days, at most 200 MB in all, and no new record within 10 min of the last. Sizes, measured on 2026-10-22:
+11 MB of memory for the service, about 11 % of one core, nothing on the card in normal running, a few MB per record. One sample took 48 ms on the
 board. Only host-side driver files are read: `acq` and `tx_stats` read the chip's registers, and reading a hung
 chip could set off the very reset being recorded. `remove` takes it out and keeps the records.

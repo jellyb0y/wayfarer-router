@@ -14,13 +14,15 @@
 #             host-side queues, the radio's temperature, and every client's inactivity and signal.
 #             Two files of SAMPLE_LINES, so between one and two hours.
 #   usbmon    the text trace of the radio's USB bus, in chunks of USB_LINES; the newest USB_CHUNKS
-#             are kept. Measured on 2026-10-22: 527 URBs a second with five clients, about two
-#             trace lines each, so a chunk is a little over half a minute.
+#             are kept. Measured on 2026-10-22 with five clients: about 1700 trace lines a second,
+#             so a chunk (about 2.9 MB) is 23 s and the ring holds the last minute and a half.
 #
 # Nothing touches the card until the radio goes silent: clients listed and no packet received for
 # SILENT_S seconds. That is shorter than the radio watch's minute, so the record is taken before
 # the watch restarts the access point. A second record is taken once packets flow again, so the
-# repair is in it too. Each record is one .tgz under STORE; the newest KEEP are kept.
+# repair is in it too. Each record is one .tgz under STORE; the newest KEEP are kept, none older than
+# MAX_AGE_DAYS, and no more than MAX_STORE_KB in all. A silence within MIN_GAP_S of the last record
+# is not recorded, so the card sees at most two records in ten minutes.
 #
 # Only host-side driver files are read (`xmit-queues`, `rx-queues`). Files such as `acq` and
 # `tx_stats` read the chip's registers, and reading a hung chip is the one thing a recorder must
@@ -42,6 +44,10 @@ USB_LINES=40000
 USB_CHUNKS=4
 SILENT_S=20
 KEEP=20
+# A radio that flaps would otherwise write a record every minute, all day, to a card that wears out.
+MIN_GAP_S=600
+MAX_AGE_DAYS=14
+MAX_STORE_KB=$((200 * 1024))
 USAGE="usage: $0 install|remove|run <ap-interface>"
 
 [ $# -eq 2 ] || { echo "$USAGE" >&2; exit 2; }
@@ -116,8 +122,21 @@ record() {
   cp "$RING"/usb.* "$RING/$name/" 2>/dev/null || true
   tar -C "$RING" -czf "$STORE/$name.tgz" "$name"
   rm -rf "${RING:?}/$name"
-  ls -1t "$STORE"/*.tgz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
+  prune
   echo "recorded $STORE/$name.tgz ($why)"
+}
+
+# Run after every record and once an hour, so the store stays bounded by count, by age and by size
+# whatever happened to the radio and however long this runs.
+prune() {
+  [ -d "$STORE" ] || return 0
+  ls -1t "$STORE"/*.tgz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
+  find "$STORE" -maxdepth 1 -name '*.tgz' -mtime +"$MAX_AGE_DAYS" -delete
+  while [ "$(du -sk "$STORE" | cut -f1)" -gt "$MAX_STORE_KB" ]; do
+    oldest=$(ls -1tr "$STORE"/*.tgz 2>/dev/null | head -1)
+    [ -n "$oldest" ] || break
+    rm -f "$oldest"
+  done
 }
 
 run() {
@@ -131,7 +150,7 @@ run() {
 
   # The trace: split writes fixed-size chunks; the loop below drops all but the newest.
   ( cd "$RING" && exec split -l "$USB_LINES" -a 6 -d - usb. < "$trace" ) &
-  local tracer=$! last_rx=-1 still=0 armed=1 recovered_at=0 n=0 file now rx clients
+  local tracer=$! last_rx=-1 still=0 armed=1 recovered_at=0 last_record=0 n=0 file now rx clients
   trap 'kill $tracer 2>/dev/null' EXIT
 
   while kill -0 $tracer 2>/dev/null; do
@@ -147,9 +166,9 @@ run() {
     clients=$(sed -n 's/.*sta=\[\(.*\)\]/\1/p' <<<"$line" | wc -w)
     now=$(date +%s)
     if [ "$rx" = "$last_rx" ] && [ "$clients" -gt 0 ]; then still=$((still + 1)); else still=0; fi
-    if [ $armed -eq 1 ] && [ $still -ge $SILENT_S ]; then
+    if [ $armed -eq 1 ] && [ $still -ge $SILENT_S ] && [ $((now - last_record)) -ge $MIN_GAP_S ]; then
       record silent || true
-      armed=0
+      armed=0 last_record=$now
     elif [ $armed -eq 0 ] && [ "$rx" != "$last_rx" ]; then
       [ $recovered_at -eq 0 ] && recovered_at=$now
       # Thirty seconds after packets flow again, so the clients' return is in the record too.
@@ -159,6 +178,7 @@ run() {
       fi
     fi
     last_rx=$rx
+    [ $((n % 3600)) -eq 0 ] && prune
     sleep 1
   done
   echo "the usbmon reader stopped" >&2
