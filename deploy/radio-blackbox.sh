@@ -75,7 +75,9 @@ MemoryMax=64M
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now "$UNIT"
+  systemctl enable "$UNIT"
+  # `enable --now` leaves a running recorder on the old script: installing again must restart it.
+  systemctl restart "$UNIT"
   systemctl --no-pager --lines=0 status "$UNIT"
 }
 
