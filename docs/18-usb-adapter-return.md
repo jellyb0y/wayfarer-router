@@ -354,3 +354,13 @@ reboot.
   `radio.usb-rebound` — and the kernel lines are in the journal of that boot: copy them out before it
   rotates, and check the priority they were logged at, which the watch assumes is `err`.
 * Every result above goes into [12-hardware-invariants.md](12-hardware-invariants.md) with its numbers and date.
+
+**The flight recorder.** `deploy/radio-blackbox.sh install <ap-interface>` installs
+`wayfarer-radio-blackbox.service`, which records, in memory under `/run/wayfarer-blackbox`, one line a second
+(counters, the USB device's URB count, the driver's host-side queues, temperature, every client's inactivity and
+signal) and the usbmon text trace of the radio's bus. When clients are listed and nothing has been received for
+20 s — before the watch's minute — it writes one `.tgz` to `/var/lib/wayfarer/blackbox`, and a second once
+packets flow again; the newest 20 are kept. Sizes, measured or derived from 527 URBs a second on 2026-10-22:
+about 20 MB of memory, nothing on the card in normal running, a few MB per record. One sample took 48 ms on the
+board. Only host-side driver files are read: `acq` and `tx_stats` read the chip's registers, and reading a hung
+chip could set off the very reset being recorded. `remove` takes it out and keeps the records.
