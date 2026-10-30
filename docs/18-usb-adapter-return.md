@@ -364,3 +364,27 @@ packets flow again; the newest 20 are kept, none older than 14 days, at most 200
 11 MB of memory for the service, about 11 % of one core, nothing on the card in normal running, a few MB per record. One sample took 48 ms on the
 board. Only host-side driver files are read: `acq` and `tx_stats` read the chip's registers, and reading a hung
 chip could set off the very reset being recorded. `remove` takes it out and keeps the records.
+
+## 2026-10-30: a hang the watch did not see, and a recovery that left clients without addresses
+
+**Symptom.** At about 14:36 MSK the network vanished from every client's list. hostapd reported
+`ENABLED` with three stations; the flight recorder took `20261030T143556-silent.tgz` and, at 14:38:14,
+`…-recovered.tgz`. Clients were dropped for inactivity at 14:38–14:39. Adapter temperature 36–38 °C
+throughout (hwmon `temp1_input`), the board 45–47 °C — heat is not the cause.
+
+**Why the radio watch did nothing.** Its rule was "clients listed and the received-packet counter has
+not moved for a minute". The recorder's per-second samples show the counter did move: 17 packets in
+about 250 s (rx 67381998 → 67382015), one every 10 to 30 s. Each one reset the minute. The rule now
+judges a rate — fewer than 6 packets received over a minute with clients listed is silence — with 6
+taken from the earlier 13 h record, in which a working radio never stood still for 10 s
+(`core/radio-watch.ts`, `MIN_RX_PACKETS_PER_WINDOW`).
+
+**Why clients then got no address.** Restarting hostapd did not help (tx +3, rx 0 in 10 s); unloading
+and loading `mt7921u` did. But the access point's units were `BindsTo=` the interface and
+`WantedBy=multi-user.target` only: the reload stopped hostapd and the DHCP/DNS service with the
+interface, and nothing started them when it came back, so clients joined and were never answered.
+The templates for the access point, its DHCP and the wireless client are now also wanted by their
+interface's device unit, and an instance is enabled again when its template is rewritten — `enable`
+creates the install links, and an already-enabled instance would otherwise keep the old set.
+Verified on the bench by result: after `modprobe -r mt7921u; modprobe mt7921u`, both units were
+stopped at 14:56:06 and started on their own at 14:56:11; five clients rejoined and got leases.

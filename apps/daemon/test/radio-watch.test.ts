@@ -177,6 +177,18 @@ test('frames received with clients connected is health', async () => {
   assert.deepEqual(b.calls, []);
 });
 
+test('a trickle of stray packets does not hide a hung radio (2026-10-30: 17 packets in 250 s)', async () => {
+  const b = bench();
+  b.state.stations = 3;
+  await b.watch.check();
+  for (let i = 0; i < 4; i += 1) {
+    b.state.rx += 1;
+    b.advance(30_000);
+    await b.watch.check();
+  }
+  assert.deepEqual(b.calls, ['restart wf-hostapd@wlx90de8047b4b4.service']);
+});
+
 test('frames still being sent do not hide a radio that receives nothing', async () => {
   // Measured on 2026-10-22: from 19:28:50 the adapter received nothing while hostapd handed it about one
   // frame a second, and the kernel stayed quiet until 19:34:10.

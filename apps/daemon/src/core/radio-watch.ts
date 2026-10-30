@@ -16,7 +16,7 @@
  *   above were logged at `err` is an assumption: the journal of that night had rotated away by the time
  *   this was written.
  * * **hostapd not `ENABLED`** for two looks in a row while its unit is enabled.
- * * **Clients listed and no packet in for {@link SILENT_WITH_CLIENTS_MS}.** Without clients an access
+ * * **Clients listed and fewer than {@link MIN_RX_PACKETS_PER_WINDOW} packets in over {@link SILENT_WITH_CLIENTS_MS}.** Without clients an access
  *   point's counters honestly stand still, so silence alone proves nothing. Only the receive side is
  *   judged: on 2026-10-22 the same adapter received nothing from 19:28:50 while hostapd still handed it
  *   about one frame a second to send, so `tx_packets` kept moving and a rule that wanted both counters
@@ -45,6 +45,17 @@ import type { ObserverRegistry } from './observers.ts';
 
 export const RADIO_WATCH_CHECK_MS = 30_000;
 export const SILENT_WITH_CLIENTS_MS = 60_000;
+/**
+ * Fewer packets than this received over {@link SILENT_WITH_CLIENTS_MS}, with clients listed, is silence.
+ *
+ * Not zero. Measured on the bench board, 2026-10-30 14:35–14:42: the adapter hung with three clients
+ * listed and received 17 packets in about 250 s — one every 10 to 30 s — while it sent no beacons and
+ * the network vanished from every client's list. The rule was "no packet at all for a minute", and each
+ * stray packet reset it, so the watch never acted and the radio stayed down until restarted by hand.
+ * Six is the floor the 13 h of per-second counters above set: received packets never stood still for
+ * 10 s while a client was listed, so a working radio receives at least six a minute.
+ */
+export const MIN_RX_PACKETS_PER_WINDOW = 6;
 /** How long a rung is given before it is judged — and before the kernel log is believed again. */
 export const REPAIR_SETTLE_MS = 2 * 60_000;
 /** Between one climb of the ladder and the next. */
@@ -68,7 +79,8 @@ interface Target {
   /** Where the kernel log was last read up to. */
   cursor: string | null;
   counters: { txPackets: number; rxPackets: number } | null;
-  silentSince: number | null;
+  /** Received-packet readings while clients are listed, oldest first, back to just over one window. */
+  rxHistory: Array<{ at: number; rx: number }>;
   notEnabledLooks: number;
   rung: 0 | 1 | 2;
   lastRepairAt: number | null;
@@ -136,9 +148,19 @@ export function watchAccessPointRadio(input: {
     const stations = (status?.bss ?? []).reduce((sum, bss) => sum + (bss.stationCount ?? 0), 0);
 
     const counters = await platform.radio.counters(target.iface);
-    const moved = counters === null || target.counters === null || counters.rxPackets !== target.counters.rxPackets;
     target.counters = counters;
-    target.silentSince = !enabled || stations === 0 || moved ? null : (target.silentSince ?? at);
+    if (!enabled || stations === 0 || counters === null) target.rxHistory = [];
+    else {
+      target.rxHistory.push({ at, rx: counters.rxPackets });
+      // Keep the newest reading that is at least a window old, and everything after it.
+      while (target.rxHistory.length > 1 && at - target.rxHistory[1]!.at >= SILENT_WITH_CLIENTS_MS) target.rxHistory.shift();
+    }
+    const oldest = target.rxHistory[0];
+    const received = oldest === undefined || counters === null ? null : counters.rxPackets - oldest.rx;
+    const silentFor =
+      oldest !== undefined && received !== null && received >= 0 && received < MIN_RX_PACKETS_PER_WINDOW && at - oldest.at >= SILENT_WITH_CLIENTS_MS
+        ? at - oldest.at
+        : null;
 
     if (settling) return `${target.iface}: a repair is settling`;
 
@@ -149,8 +171,8 @@ export function watchAccessPointRadio(input: {
           ? status === null
             ? `${target.unit} is not running`
             : `hostapd reports ${status.state ?? 'no state'} rather than ENABLED`
-          : target.silentSince !== null && at - target.silentSince >= SILENT_WITH_CLIENTS_MS
-            ? `${String(stations)} client(s) listed and no packet received for ${String(Math.round((at - target.silentSince) / 1_000))} s`
+          : silentFor !== null
+            ? `${String(stations)} client(s) listed and ${String(received)} packet(s) received in ${String(Math.round(silentFor / 1_000))} s`
             : null;
 
     // Not yet judged down, and not up either: neither a fault nor a recovery. Declaring recovery here
@@ -177,7 +199,7 @@ export function watchAccessPointRadio(input: {
     }
 
     target.lastRepairAt = at;
-    target.silentSince = null;
+    target.rxHistory = [];
     target.notEnabledLooks = 0;
 
     if (target.rung === 0) {
@@ -247,7 +269,7 @@ export function watchAccessPointRadio(input: {
           bus: null,
           cursor: null,
           counters: null,
-          silentSince: null,
+          rxHistory: [],
           notEnabledLooks: 0,
           rung: 0,
           lastRepairAt: null,
