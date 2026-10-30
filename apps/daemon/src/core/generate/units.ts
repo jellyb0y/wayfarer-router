@@ -177,7 +177,12 @@ export function hostapdUnit(): DesiredUnit {
       'NoNewPrivileges=yes',
       '',
       '[Install]',
-      'WantedBy=multi-user.target',
+      // Also wanted by the interface itself. BindsTo above stops this unit when the device goes —
+      // a driver reload, a USB reset — and nothing started it again when the device came back:
+      // measured on the bench board, 2026-10-30, after `modprobe -r mt7921u; modprobe mt7921u` the
+      // interface returned and the access point and its DHCP stayed stopped until started by hand,
+      // so clients joined and got no address. multi-user.target only pulls units in at boot.
+      'WantedBy=multi-user.target sys-subsystem-net-devices-%i.device',
       '',
     ].join('\n'),
   };
@@ -341,7 +346,12 @@ export function supplicantUnit(): DesiredUnit {
       'NoNewPrivileges=yes',
       '',
       '[Install]',
-      'WantedBy=multi-user.target',
+      // Also wanted by the interface itself. BindsTo above stops this unit when the device goes —
+      // a driver reload, a USB reset — and nothing started it again when the device came back:
+      // measured on the bench board, 2026-10-30, after `modprobe -r mt7921u; modprobe mt7921u` the
+      // interface returned and the access point and its DHCP stayed stopped until started by hand,
+      // so clients joined and got no address. multi-user.target only pulls units in at boot.
+      'WantedBy=multi-user.target sys-subsystem-net-devices-%i.device',
       '',
     ].join('\n'),
   };
@@ -389,7 +399,12 @@ export function dhcpUnit(): DesiredUnit {
       'NoNewPrivileges=yes',
       '',
       '[Install]',
-      'WantedBy=multi-user.target',
+      // Also wanted by the interface itself. BindsTo above stops this unit when the device goes —
+      // a driver reload, a USB reset — and nothing started it again when the device came back:
+      // measured on the bench board, 2026-10-30, after `modprobe -r mt7921u; modprobe mt7921u` the
+      // interface returned and the access point and its DHCP stayed stopped until started by hand,
+      // so clients joined and got no address. multi-user.target only pulls units in at boot.
+      'WantedBy=multi-user.target sys-subsystem-net-devices-%i.device',
       '',
     ].join('\n'),
   };

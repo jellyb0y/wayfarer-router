@@ -871,7 +871,13 @@ export function diff(input: DiffInput): Plan2 {
     // a narrowed apply would then enable hostapd without writing its configuration or starting it,
     // leaving a unit that is enabled, not running, and configured to fail at the next boot. Worse, it
     // defers a network change to a reboot with nothing having confirmed it.
-    if (unit.enabled && current?.enabled !== true) {
+    // An instance whose template was rewritten is enabled again even when it already is: `enable` is
+    // what creates the `[Install]` links, so an instance enabled under an older template keeps the old
+    // set — added 2026-10-30, when the device-wanted link joined the access point's templates and
+    // instances enabled before it would never have received it.
+    const template = instanceOf(unit.name);
+    const templateRewritten = template !== null && changedFiles.has(`${PATHS.unitDir}/${template}`);
+    if (unit.enabled && (current?.enabled !== true || templateRewritten)) {
       unitChanges.push({ name: unit.name, action: 'enable', purpose: unit.purpose, blastRadius: unitClass });
     }
     if (!unit.enabled && current?.enabled === true) {

@@ -381,7 +381,7 @@ StateDirectory=wayfarer
 NoNewPrivileges=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target sys-subsystem-net-devices-%i.device
 ```
 
 ### /usr/local/lib/systemd/system/wf-firewall-ready.target (mode 644)
@@ -471,7 +471,7 @@ RuntimeDirectoryPreserve=yes
 NoNewPrivileges=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target sys-subsystem-net-devices-%i.device
 ```
 
 ### /usr/local/lib/systemd/system/wf-openvpn@.service (mode 644)
@@ -615,7 +615,7 @@ RuntimeDirectoryPreserve=yes
 NoNewPrivileges=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target sys-subsystem-net-devices-%i.device
 ```
 
 ### /usr/local/lib/systemd/system/wf-transport@.service (mode 644)
