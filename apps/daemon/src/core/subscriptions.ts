@@ -32,7 +32,7 @@ export interface RefreshOutcome {
  * The document with `groupId`'s members replaced by `nodes`.
  *
  * * **A member the feed still offers keeps its id and its place**, matched by `nodeIdentity` (protocol,
- *   server, port) rather than by its label, which providers change for cosmetic reasons. The id is the
+ *   server, port, security, transport) rather than by its label, which providers change for cosmetic reasons. The id is the
  *   member's outbound tag and its external client's unit name, and its place is its loopback port
  *   (`core/emit.ts` hands ports out in order), so neither moves unless the node itself goes.
  * * **A new node goes at the end**, as `<group>-<n>` with the first `n` no tunnel, group or member uses.
@@ -80,14 +80,15 @@ export function refreshGroup(input: { document: ProfileDocument; groupId: string
   const kept = new Set<string>();
 
   for (const member of group.members) {
-    const node = offered.get(member.node);
-    if (node === undefined) {
+    const identity = offered.has(member.node) ? member.node : legacyMatch(member, offered, kept);
+    const node = identity === undefined ? undefined : offered.get(identity);
+    if (identity === undefined || node === undefined) {
       removed.push(member.id);
       continue;
     }
-    kept.add(member.node);
-    const next = asMember(member.id, member.node, node);
-    if (next.name !== member.name || !sameValue(next.config, member.config)) updated.push(member.id);
+    kept.add(identity);
+    const next = asMember(member.id, identity, node);
+    if (next.name !== member.name || next.node !== member.node || !sameValue(next.config, member.config)) updated.push(member.id);
     members.push(next);
   }
   for (const [identity, node] of offered) {
@@ -104,6 +105,23 @@ export function refreshGroup(input: { document: ProfileDocument; groupId: string
     removed,
     notes,
   };
+}
+
+/**
+ * The offered node a member stored before identities named the wrapping (`protocol://server:port`, no
+ * query) still is: same endpoint, same `security` and `network` in its stored configuration. Without
+ * this every existing member would be removed and re-added under a new id on the first refresh after the
+ * change — new outbound tags, new unit names, new loopback ports — for nodes that did not change.
+ */
+function legacyMatch(member: GroupMember, offered: ReadonlyMap<string, ParsedNode>, kept: ReadonlySet<string>): string | undefined {
+  if (member.node.includes('?')) return undefined;
+  const config = member.config as { security?: unknown; network?: unknown };
+  for (const identity of offered.keys()) {
+    if (kept.has(identity) || !identity.startsWith(`${member.node}?`)) continue;
+    const query = new URLSearchParams(identity.slice(member.node.length + 1));
+    if (query.get('security') === config.security && query.get('type') === config.network) return identity;
+  }
+  return undefined;
 }
 
 /**

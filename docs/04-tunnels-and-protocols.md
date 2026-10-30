@@ -1392,6 +1392,13 @@ always writes `encryption`, `none` when absent.
 `generate_204` (0.16 s, 0.23 s); from the board as an unprivileged user, i.e. through the tunnel, the
 egress address was 185.224.211.163, `generate_204` 204 in 0.19 s, youtube.com 200 in 0.40 s.
 
-**Open.** The feed offered three nodes and the group holds two: two of them share server and port
-(`5.188.117.151:443`, one TLS, one REALITY), and members are matched by protocol + server + port, so
-one replaced the other. Not changed here.
+**Corrected the same day: node identity names the wrapping.** The feed offered three nodes and the
+group held two: two of them share server and port (`5.188.117.151:443`, one TLS, one REALITY — different
+services behind one port), and members were matched by protocol + server + port, so one replaced the
+other. The reasoning that lost was "an endpoint is a node"; a port is shared by whatever the server
+multiplexes on it. `nodeIdentity` is now `protocol://server:port?security=…&type=…`. A member stored
+with the older identity is matched by endpoint plus its stored `security` and `network`, keeps its id
+(so its outbound tag, unit name and loopback port do not move), and takes the new identity on that
+refresh. Verified on the bench: both groups refreshed, every kept member kept its id. The live check of
+the original case was not possible: by then the provider's feed offered only its two `:80` nodes, so
+the two-on-one-port case is covered by `subscriptions-refresh.test.ts` only.

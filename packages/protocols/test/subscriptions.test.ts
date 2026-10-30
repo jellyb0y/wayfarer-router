@@ -391,9 +391,9 @@ test('a node that disappears from a subscription is reported, so re-pointing pol
   assert.deepEqual(diff.added, []);
 });
 
-test('node identity is the catalogue entry and the endpoint, so it survives a rename', () => {
+test('node identity is the catalogue entry, the endpoint and the wrapping, so it survives a rename', () => {
   const node = only('vless-ws-tls.txt');
-  assert.equal(nodeIdentity(node), 'vless://vless.example.com:443');
+  assert.equal(nodeIdentity(node), 'vless://vless.example.com:443?security=tls&type=ws');
 });
 
 /* ── the two lists, and the boundary between them ────────────────────────────────────────── */

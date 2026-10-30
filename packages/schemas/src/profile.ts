@@ -1005,7 +1005,7 @@ export const GroupMember = Type.Object(
   {
     id: Source('generated', Identifier),
     name: Source('subscription', Type.String({ minLength: 1, maxLength: 64 })),
-    /** The feed's identity for the node: `protocol://server:port`. A rename keeps it. */
+    /** The feed's identity for the node: `protocol://server:port?security=…&type=…`. A rename keeps it. */
     node: Source('subscription', Type.String({ minLength: 1, maxLength: 256 })),
     protocol: Source('subscription', Type.Literal('vless')),
     config: FeedWritten(TUNNEL_CONFIGS.vless),

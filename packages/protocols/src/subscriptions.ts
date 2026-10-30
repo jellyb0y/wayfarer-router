@@ -308,7 +308,7 @@ export function diffSubscription(previous: ParsedNode[], next: ParsedNode[]): Su
 }
 
 /**
- * `protocol://server:port`. Stable across a rename, which is the point.
+ * `protocol://server:port?security=…&type=…`. Stable across a rename, which is the point.
  *
  * Two fields rather than a function per catalogue entry, and that is not laziness: an entry that does
  * not name an endpoint in `server` and `port` is an entry no link produces. OpenVPN carries its remotes
@@ -317,7 +317,17 @@ export function diffSubscription(previous: ParsedNode[], next: ParsedNode[]): Su
  */
 export function nodeIdentity(node: ParsedNode): string {
   const endpoint = endpointOf(node);
-  return `${node.protocol}://${endpoint.server}:${endpoint.port}`;
+  const base = `${node.protocol}://${endpoint.server}:${endpoint.port}`;
+  /*
+   * The wrapping is part of who the node is. Seen on 2026-10-30: a feed offered a TLS node and a REALITY
+   * node on the same `server:443`, both xhttp — two different services behind one port — and with
+   * protocol, server and port alone the second replaced the first, so a group held four of six nodes.
+   */
+  const config = node.config as { security?: unknown; network?: unknown };
+  const parts: string[] = [];
+  if (typeof config.security === 'string') parts.push(`security=${config.security}`);
+  if (typeof config.network === 'string') parts.push(`type=${config.network}`);
+  return parts.length === 0 ? base : `${base}?${parts.join('&')}`;
 }
 
 /**

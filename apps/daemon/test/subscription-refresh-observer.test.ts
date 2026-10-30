@@ -31,7 +31,7 @@ const feed = (...links: string[]): string => Buffer.from(links.join('\n')).toStr
 const tunnel = (id: string, server: string, uuid: string, name = id): Member => ({
   id,
   name,
-  node: `vless://${server}:8080`,
+  node: `vless://${server}:8080?security=none&type=tcp`,
   protocol: 'vless',
   config: { server, port: 8080, id: uuid, network: 'tcp', security: 'none' },
 });

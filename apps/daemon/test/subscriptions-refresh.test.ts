@@ -19,7 +19,7 @@ function node(server: string, label: string, id = 'u'): ParsedNode {
 const member = (id: string, server: string, account = 'u'): Group['members'][number] => ({
   id,
   name: id,
-  node: `vless://${server}:443`,
+  node: `vless://${server}:443?security=tls&type=tcp`,
   protocol: 'vless',
   config: { server, port: 443, id: { $secret: account } as never, network: 'tcp', security: 'tls' },
 });
@@ -51,7 +51,7 @@ test('a new node joins at the end with a fresh id, and is a member at once — n
   const members = result.document.groups[0]!.members;
   assert.deepEqual(members.map((entry) => entry.id), ['de', 'feed-1'], 'the existing member keeps its place, and with it its port');
   assert.equal(members[1]!.name, '🇵🇱 Poland · Warsaw');
-  assert.equal(members[1]!.node, 'vless://new.example:443');
+  assert.equal(members[1]!.node, 'vless://new.example:443?security=tls&type=tcp');
 });
 
 test('a fresh id avoids every id in the document: tunnels, groups and members', () => {
@@ -101,4 +101,22 @@ test('a timer may apply a service change and must stop at a network one', () => 
   assert.equal(refreshMayApply('service'), true);
   assert.equal(refreshMayApply('network'), false);
   assert.equal(refreshMayApply('boot'), false);
+});
+
+test('two nodes on one server and port with different wrapping are two members', () => {
+  const reality: ParsedNode = { scheme: 'vless', label: 'Reality', protocol: 'vless', config: { server: 'ru.example', port: 443, id: 'u', network: 'xhttp', security: 'reality' } };
+  const tls: ParsedNode = { scheme: 'vless', label: 'TLS', protocol: 'vless', config: { server: 'ru.example', port: 443, id: 'u', network: 'xhttp', security: 'tls' } };
+  const outcome = refreshGroup({ document: documentWith([]), groupId: 'feed', nodes: [reality, tls] });
+  const members = outcome.document.groups[0]!.members;
+  assert.equal(members.length, 2);
+  assert.deepEqual(members.map((entry) => entry.name), ['Reality', 'TLS']);
+});
+
+test('a member stored with the older identity keeps its id and takes the new identity', () => {
+  const legacy = { ...member('de', 'de.example'), node: 'vless://de.example:443' };
+  const outcome = refreshGroup({ document: documentWith([legacy]), groupId: 'feed', nodes: [node('de.example', 'de')] });
+  const members = outcome.document.groups[0]!.members;
+  assert.deepEqual(members.map((entry) => [entry.id, entry.node]), [['de', 'vless://de.example:443?security=tls&type=tcp']]);
+  assert.deepEqual(outcome.removed, []);
+  assert.deepEqual(outcome.added, []);
 });
