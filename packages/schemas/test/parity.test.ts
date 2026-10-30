@@ -584,8 +584,12 @@ test('an exempting mark removes a position from the required set and an unmarked
      * 129 → 130 on 2026-10-16: `/accessPoint/wpa3` joined. The built-in radio's driver lists the
      * management-frame cipher and refuses its key, so the access point does not start with WPA3 on, and
      * no report says so beforehand — only the owner can turn it off.
+     *
+     * 130 → 132 on 2026-10-30: VLESS `mode` and `extra`, the two xhttp parameters. A link fills them, and
+     * like every other VLESS field the owner may edit them afterwards on a tunnel he made. `subscription` 18 → 20:
+     * the same two leaves of a group member's configuration, which the feed writes.
      */
-    { person: 130, generated: 8, device: 4, subscription: 18, catalogue: 1 },
+    { person: 132, generated: 8, device: 4, subscription: 20, catalogue: 1 },
     'the source distribution changed. That is not necessarily wrong, but it is never incidental: ' +
       'every entry here is a decision about whether a person must be given a control. Re-derive it ' +
       'and say in the diff which field moved and why.',

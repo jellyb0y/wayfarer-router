@@ -174,9 +174,9 @@ test('a parsed draft is checked against the catalogue entry that will have to st
 test('every refused transport and security names the values that are accepted', () => {
   // A refusal that says only what was rejected is a riddle: the person is sent to documentation to
   // learn what would have worked.
-  const transport = refusal('vless://11111111-2222-3333-4444-555555555555@h.example.com:443?type=xhttp#X');
-  assert.match(transport.reason, /"xhttp"/);
-  for (const accepted of ['tcp', 'ws', 'grpc', 'http', 'quic']) {
+  const transport = refusal('vless://11111111-2222-3333-4444-555555555555@h.example.com:443?type=kcp#X');
+  assert.match(transport.reason, /"kcp"/);
+  for (const accepted of ['tcp', 'ws', 'grpc', 'http', 'quic', 'xhttp']) {
     assert.match(transport.reason, new RegExp(accepted), `the refusal must name ${accepted}`);
   }
 
@@ -185,6 +185,20 @@ test('every refused transport and security names the values that are accepted', 
   for (const accepted of ['none', 'tls', 'reality']) {
     assert.match(security.reason, new RegExp(accepted));
   }
+});
+
+test('an xhttp link keeps its mode and extra, which the server may depend on', () => {
+  const result = parseSubscription(
+    'vless://11111111-2222-3333-4444-555555555555@h.example.com:443?encryption=none&type=xhttp&path=%2Fp&host=h.example.com' +
+      '&mode=auto&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%7D&security=tls&sni=h.example.com&fp=chrome&alpn=h2#X',
+  );
+  assert.equal(result.failures.length, 0);
+  const config = result.nodes[0]?.config as Record<string, unknown>;
+  assert.equal(config['network'], 'xhttp');
+  assert.equal(config['path'], '/p');
+  assert.equal(config['mode'], 'auto');
+  assert.equal(config['extra'], '{"xPaddingBytes":"100-1000"}');
+  assert.deepEqual(result.nodes[0]?.ignoredParams ?? [], []);
 });
 
 test('h2 is http under an older spelling, which is a translation rather than a guess', () => {

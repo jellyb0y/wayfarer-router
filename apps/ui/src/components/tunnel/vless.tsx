@@ -33,6 +33,7 @@ const NETWORK = [
   { value: 'grpc', title: 'gRPC' },
   { value: 'http', title: 'HTTP' },
   { value: 'quic', title: 'QUIC' },
+  { value: 'xhttp', title: 'XHTTP' },
 ] as const;
 
 const SECURITY = [

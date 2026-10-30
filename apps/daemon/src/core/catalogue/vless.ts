@@ -79,6 +79,8 @@ const EXTERNAL_ONLY_FIELDS: ReadonlyMap<string, string> = new Map([
     'the link carries an encryption parameter, and the proxy core defines no encryption field on a ' +
       'VLESS account — it rejects it outright',
   ],
+  ['mode', 'the link uses the xhttp transport, which only the external client implements'],
+  ['extra', 'the link uses the xhttp transport, which only the external client implements'],
   [
     'headerType',
     'the link disguises TCP as HTTP, and the proxy core has no such disguise for a plain TCP transport',
@@ -113,6 +115,10 @@ export function establishCarrier(
     if (field === 'encryption' && config.encryption === 'none') continue;
     if (field === 'headerType' && config.headerType === 'none') continue;
     external.push(reason);
+  }
+  // The core has no xhttp transport at all; a link without `mode`/`extra` still needs the client.
+  if (config.network === 'xhttp' && external.length === 0) {
+    external.push('the link uses the xhttp transport, which only the external client implements');
   }
 
   if (external.length > 0) {
@@ -187,7 +193,10 @@ function nativeOutbound(config: VlessConfig): Record<string, unknown> {
  */
 function xrayConfig(config: VlessConfig, port: number, logLevel: CarrierLogLevel = 'warning'): string {
   const user: Record<string, unknown> = { id: secretText(config.id) };
-  if (config.encryption !== undefined) user['encryption'] = secretText(config.encryption);
+  // Always written: Xray 26.3.27 refuses a VLESS user without it ("please add/set "encryption":"none"
+  // for every user"), measured on the bench board 2026-10-30 — the parser drops `none`, so an
+  // account without post-quantum encryption reached the client with no field at all and never started.
+  user['encryption'] = config.encryption === undefined ? 'none' : secretText(config.encryption);
   if (config.flow !== undefined) user['flow'] = config.flow;
 
   const streamSettings: Record<string, unknown> = {
@@ -245,6 +254,15 @@ function xrayConfig(config: VlessConfig, port: number, logLevel: CarrierLogLevel
     };
   }
 
+  if (config.network === 'xhttp') {
+    streamSettings['xhttpSettings'] = {
+      path: config.path ?? '/',
+      ...(config.host === undefined ? {} : { host: config.host }),
+      ...(config.mode === undefined ? {} : { mode: config.mode }),
+      ...(config.extra === undefined ? {} : { extra: parseExtra(config.extra) }),
+    };
+  }
+
   const document = {
     log: { loglevel: logLevel },
     inbounds: [
@@ -269,6 +287,20 @@ function xrayConfig(config: VlessConfig, port: number, logLevel: CarrierLogLevel
   };
 
   return `${JSON.stringify(document, null, 2)}\n`;
+}
+
+/**
+ * The link's `extra`, as the object the client expects. Text that is not a JSON object is dropped
+ * rather than written: the client refuses its whole configuration over one bad field, and a tunnel
+ * that starts without padding is better than one that does not start.
+ */
+function parseExtra(text: string): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function xrayScript(configPath: string, port: number): string {

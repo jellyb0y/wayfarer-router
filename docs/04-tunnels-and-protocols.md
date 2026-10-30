@@ -1357,3 +1357,41 @@ exist on that entry rather than existing and being ignored.
 would work for any protocol, but it is the shape of the loop this device already lost a day to — a
 tunnel's transport captured by the tunnel — and it would need the server's address, which a profile can
 give as a name. A listener the client is told about is explicit and has nothing to match.
+
+## VLESS over xhttp, and a feed fetched during an outage (2026-10-30)
+
+**Symptom.** Every member of the egress group became unreachable from the home uplink and from a
+Moscow VPS alike, while each server was up and answered from Germany — blocked on the Russian side.
+The owner supplied a second feed as a reserve. Two things stopped it from being used:
+
+1. **The device could not fetch any feed.** The daemon's route is direct (`8000: uidrange 0-0 lookup
+   main`), but its name lookups went to the system resolver, which sends every query (`~.`) to the
+   core's resolver on `tun0`, which answers through the egress — on `block`. Measured on the bench
+   board: `resolvectl query <feed host>` → "does not have any RR"; `resolvectl query -i end0 <feed
+   host>` → the address at once; the feed fetched by that address → `200` in 0.15 s. The refresh, the
+   one mechanism that could bring new nodes, was disabled by the outage it was meant to end.
+   **Decision:** `platform/http.ts` resolves feed hosts through the resolvers the uplinks learned
+   (`DNS=` in `/run/systemd/netif/links/*`, which never lists the core's), falling back to the system
+   resolver only when none is known. Verified after deploy: the reserve feed refreshed on request,
+   3 nodes read. The old feed still fails, with a connect timeout rather than a lookup — its server is
+   assumed to be blocked like the nodes; not measured further.
+
+2. **Every node in the reserve feed used `type=xhttp`**, which the parser refused. xhttp exists only in
+   the external client (Xray 26.3.27 on the bench), so `network: "xhttp"`, `mode` and `extra` all
+   force that carrier, and the generator writes `xhttpSettings` with `extra` parsed as the JSON object
+   the client expects (dropped, not written, when it is not one).
+
+**Trap found on the way.** Xray 26.3.27 refuses a VLESS user that has no `encryption` field: "please
+add/set "encryption":"none" for every user", exit 23, and the unit restart-loops. The parser drops
+`encryption=none` (it is what keeps a plain account on the native carrier), so every external-client
+tunnel without post-quantum encryption reached the client with no field. Until now every account
+carried by the external client had post-quantum encryption, so it never showed. The generator now
+always writes `encryption`, `none` when absent.
+
+**Verified** after switching `policy.egress` to the reserve group: both members' local ports passed
+`generate_204` (0.16 s, 0.23 s); from the board as an unprivileged user, i.e. through the tunnel, the
+egress address was 185.224.211.163, `generate_204` 204 in 0.19 s, youtube.com 200 in 0.40 s.
+
+**Open.** The feed offered three nodes and the group holds two: two of them share server and port
+(`5.188.117.151:443`, one TLS, one REALITY), and members are matched by protocol + server + port, so
+one replaced the other. Not changed here.

@@ -231,7 +231,7 @@ export type CloakOpenVpnConfig = Static<typeof CloakOpenVpnConfig>;
  * independently, and the carrier decision reads both.
  */
 export const VlessNetwork = Type.Union(
-  [Type.Literal('tcp'), Type.Literal('ws'), Type.Literal('grpc'), Type.Literal('http'), Type.Literal('quic')],
+  [Type.Literal('tcp'), Type.Literal('ws'), Type.Literal('grpc'), Type.Literal('http'), Type.Literal('quic'), Type.Literal('xhttp')],
   { default: 'tcp' },
 );
 
@@ -324,6 +324,19 @@ export const VlessConfig = Source('person', Type.Object(
      */
     realityPublicKey: Type.Optional(Type.String({ maxLength: 128 })),
     realityShortId: Type.Optional(Type.String({ maxLength: 32 })),
+    /**
+     * Only with `network: "xhttp"`: the link's `mode` (`auto`, `packet-up`, `stream-up`, `stream-one`).
+     *
+     * xhttp exists only in the external client, so either field sends the tunnel there. Seen on
+     * 2026-10-30 in a feed whose every node was xhttp: `mode=auto` on all three.
+     */
+    mode: Type.Optional(Type.String({ maxLength: 32 })),
+    /**
+     * Only with `network: "xhttp"`: the link's `extra`, a JSON object passed to the client as is
+     * (`xPaddingBytes`, `xmux`, …). Kept as text because its keys belong to the client, not to this
+     * product, and the same feed carried a different key set on each node.
+     */
+    extra: Type.Optional(Type.String({ maxLength: 4096 })),
   },
   { additionalProperties: false, $id: 'VlessConfig' },
 ));

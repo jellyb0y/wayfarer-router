@@ -423,6 +423,11 @@ const vless: SubscriptionParser = {
     const headerType = url.searchParams.get('headerType');
     if (headerType === 'http' && config['network'] === 'tcp') config['headerType'] = 'http';
 
+    if (config['network'] === 'xhttp') {
+      put(config, 'mode', url.searchParams.get('mode'));
+      put(config, 'extra', url.searchParams.get('extra'));
+    }
+
     const alpn = url.searchParams.get('alpn');
     if (alpn !== null && alpn !== '') {
       config['alpn'] = alpn.split(',').map((entry) => entry.trim()).filter((entry) => entry !== '');
