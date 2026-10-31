@@ -308,7 +308,7 @@ export function diffSubscription(previous: ParsedNode[], next: ParsedNode[]): Su
 }
 
 /**
- * `protocol://server:port?security=…&type=…`. Stable across a rename, which is the point.
+ * `protocol://server:port?security=…&type=…&path=…`. Stable across a rename, which is the point.
  *
  * Two fields rather than a function per catalogue entry, and that is not laziness: an entry that does
  * not name an endpoint in `server` and `port` is an entry no link produces. OpenVPN carries its remotes
@@ -323,10 +323,15 @@ export function nodeIdentity(node: ParsedNode): string {
    * node on the same `server:443`, both xhttp — two different services behind one port — and with
    * protocol, server and port alone the second replaced the first, so a group held four of six nodes.
    */
-  const config = node.config as { security?: unknown; network?: unknown };
+  const config = node.config as { security?: unknown; network?: unknown; path?: unknown };
   const parts: string[] = [];
   if (typeof config.security === 'string') parts.push(`security=${config.security}`);
   if (typeof config.network === 'string') parts.push(`type=${config.network}`);
+  /*
+   * So is the path. Seen on 2026-11-01: a feed offered `…/pl` and `…/de` on the same `server:443`, both
+   * xhttp over TLS — one front, two exits chosen by path — and without it Germany replaced Poland.
+   */
+  if (typeof config.path === 'string') parts.push(`path=${encodeURIComponent(config.path)}`);
   return parts.length === 0 ? base : `${base}?${parts.join('&')}`;
 }
 

@@ -1402,3 +1402,11 @@ with the older identity is matched by endpoint plus its stored `security` and `n
 refresh. Verified on the bench: both groups refreshed, every kept member kept its id. The live check of
 the original case was not possible: by then the provider's feed offered only its two `:80` nodes, so
 the two-on-one-port case is covered by `subscriptions-refresh.test.ts` only.
+
+**Corrected again, 2026-11-01: the path is part of it too.** A new feed offered four nodes as two pairs
+on one front each (`95.174.94.144:443`, `213.171.25.107:443`), xhttp over TLS, the pair differing only
+in `path` (`…/pl`, `…/de`) — the front picks the exit by path. With the wrapping alone, Germany would
+have replaced Poland. The reasoning that lost was the same one a step further out: "endpoint plus
+wrapping is a service". `nodeIdentity` now appends `path=…` when the link carries one. A stored member
+is matched by the identity its own stored configuration gives under today's rules, which covers both
+older formats with one rule.

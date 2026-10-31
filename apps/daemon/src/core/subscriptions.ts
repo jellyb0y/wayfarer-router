@@ -108,20 +108,15 @@ export function refreshGroup(input: { document: ProfileDocument; groupId: string
 }
 
 /**
- * The offered node a member stored before identities named the wrapping (`protocol://server:port`, no
- * query) still is: same endpoint, same `security` and `network` in its stored configuration. Without
- * this every existing member would be removed and re-added under a new id on the first refresh after the
- * change — new outbound tags, new unit names, new loopback ports — for nodes that did not change.
+ * The offered node a member stored under an older identity still is: the identity its own stored
+ * configuration gives under today's rules. Identities grew twice — the wrapping (2026-10-30), then the
+ * path (2026-11-01) — and without this every existing member would be removed and re-added under a new
+ * id on the first refresh after each change — new outbound tags, new unit names, new loopback ports —
+ * for nodes that did not change. The fields read are the endpoint and the wrapping, never a secret.
  */
 function legacyMatch(member: GroupMember, offered: ReadonlyMap<string, ParsedNode>, kept: ReadonlySet<string>): string | undefined {
-  if (member.node.includes('?')) return undefined;
-  const config = member.config as { security?: unknown; network?: unknown };
-  for (const identity of offered.keys()) {
-    if (kept.has(identity) || !identity.startsWith(`${member.node}?`)) continue;
-    const query = new URLSearchParams(identity.slice(member.node.length + 1));
-    if (query.get('security') === config.security && query.get('type') === config.network) return identity;
-  }
-  return undefined;
+  const identity = nodeIdentity({ scheme: member.protocol, label: member.name, protocol: member.protocol, config: member.config } as ParsedNode);
+  return identity !== member.node && offered.has(identity) && !kept.has(identity) ? identity : undefined;
 }
 
 /**

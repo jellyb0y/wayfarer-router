@@ -112,6 +112,21 @@ test('two nodes on one server and port with different wrapping are two members',
   assert.deepEqual(members.map((entry) => entry.name), ['Reality', 'TLS']);
 });
 
+test('two nodes on one front that differ only by path are two members (2026-11-01: …/pl and …/de)', () => {
+  const at = (path: string, label: string): ParsedNode => ({ scheme: 'vless', label, protocol: 'vless', config: { server: 'front.example', port: 443, id: 'u', network: 'xhttp', security: 'tls', path } });
+  const outcome = refreshGroup({ document: documentWith([]), groupId: 'feed', nodes: [at('/x/pl', 'PL'), at('/x/de', 'DE')] });
+  assert.deepEqual(outcome.document.groups[0]!.members.map((entry) => entry.name), ['PL', 'DE']);
+});
+
+test('a member stored before the path joined the identity keeps its id', () => {
+  const config = { server: 'front.example', port: 443, id: 'u', network: 'xhttp' as const, security: 'tls' as const, path: '/x/pl' };
+  const stored: Group['members'][number] = { ...member('pl', 'front.example'), node: 'vless://front.example:443?security=tls&type=xhttp', config };
+  const outcome = refreshGroup({ document: documentWith([stored]), groupId: 'feed', nodes: [{ scheme: 'vless', label: 'PL', protocol: 'vless', config } as ParsedNode] });
+  assert.deepEqual(outcome.document.groups[0]!.members.map((entry) => [entry.id, entry.node]), [['pl', 'vless://front.example:443?security=tls&type=xhttp&path=%2Fx%2Fpl']]);
+  assert.deepEqual(outcome.added, []);
+  assert.deepEqual(outcome.removed, []);
+});
+
 test('a member stored with the older identity keeps its id and takes the new identity', () => {
   const legacy = { ...member('de', 'de.example'), node: 'vless://de.example:443' };
   const outcome = refreshGroup({ document: documentWith([legacy]), groupId: 'feed', nodes: [node('de.example', 'de')] });
