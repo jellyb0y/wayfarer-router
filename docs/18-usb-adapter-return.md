@@ -414,3 +414,24 @@ within 20 s and 283 received packets in the next 20 s.
 the owner reports a third the day before at about the same time, which the journal no longer holds.
 Whether the time of day means anything — a neighbour's load on the channel, a client's schedule — is
 not established.
+
+**A lead, not a cause (read 2026-10-31 from the 2026-10-30 flight record and the journal).**
+
+* *What the USB trace shows.* From about 70 s into `20261030T143556-silent` the radio's data endpoints
+  fall from about 190 completions a second (`Bo:4` out, `Bi:4` in) to a handful. From about 130 s, bulk
+  OUT on endpoint 4 — frames handed to the chip to send — is still submitted 15–20 times per 10 s and
+  never completes. Control transfers (≈78/s, register access) and bulk OUT on endpoint 8 (≈1/s) keep
+  completing. The device stays on the bus and answers the host; it is the chip's transmit path that stops
+  taking frames. Heat and power are not in it: 36–38 °C, no USB errors.
+* *A pattern across both hangs.* Both began with the same client leaving: `44:af:28:f9:14:b5`, which
+  leases as `Yandex-Station-Max`. Each time hostapd logged a bare `AP-STA-DISCONNECTED`, with no
+  `disassociated` or `inactivity` line before it — every other departure in the journal has one.
+  - 2026-10-30: received packets fell from about 100/s to 11/s between the samples at 14:33:49.347 and
+    14:33:50.451, and hostapd logged the disconnect at 14:33:50.751. The stall came first, by at most
+    1.4 s.
+  - 2026-10-31: the disconnect at 15:59:17 was that client's only departure since it joined at 14:56 the
+    day before. No record exists for this one: the recorder needs 20 s with nothing received, the
+    trickle never gave it that, and its in-memory buffer was lost when the rebind restarted it at
+    16:03:40.
+* *Not established.* Whether this client's departure triggers the stall, or the stall makes the
+  firmware drop that client first. Two events are a coincidence worth testing, not a proof.
