@@ -388,3 +388,29 @@ interface's device unit, and an instance is enabled again when its template is r
 creates the install links, and an already-enabled instance would otherwise keep the old set.
 Verified on the bench by result: after `modprobe -r mt7921u; modprobe mt7921u`, both units were
 stopped at 14:56:06 and started on their own at 14:56:11; five clients rejoined and got leases.
+
+## 2026-10-31: the first rung looked like a recovery because nobody could rejoin
+
+**Symptom.** The network vanished again; the last client was dropped at 15:59:17 MSK. The rate rule
+from the day before fired: the watch restarted `wf-hostapd@wlx90de8047b4b4` at 16:01:08. hostapd came
+back `ENABLED`, but the adapter stayed hung — `rx_packets` stood at 5348665 from 16:02 to past 16:03,
+`iw station dump` listed nobody — and the watch reported `enabled, 0 client(s)`, state `ok`.
+
+**Why it stopped there.** After a repair it judged recovery by the same rules as always, and "no
+clients" is not a fault under them: an access point nobody uses stands still honestly. But a hung radio
+nobody can join also has no clients, so the first rung was always read as a success, the ladder was
+reset, and the USB rebind — the rung that works on this adapter — was never reached.
+
+**What changed.** The watch counts the clients listed when the ladder starts. If there were any, and
+by the time the rung has settled (`REPAIR_SETTLE_MS`, 2 min) none is listed while hostapd says
+`ENABLED`, that is a fault too, and the next rung is taken. A ladder started with no clients listed (a
+kernel error at night, say) is not held to it: there is nobody to come back.
+
+**Verified by result.** Unbinding `2-1:1.0` from `mt7921u` and binding it again by hand at 16:03:58 —
+what the second rung does — brought the units back on their own, the channel back to 36, two clients
+within 20 s and 283 received packets in the next 20 s.
+
+**Still open.** Two hangs on consecutive days in the afternoon (2026-10-30 ≈14:35, 2026-10-31 ≈15:59);
+the owner reports a third the day before at about the same time, which the journal no longer holds.
+Whether the time of day means anything — a neighbour's load on the channel, a client's schedule — is
+not established.

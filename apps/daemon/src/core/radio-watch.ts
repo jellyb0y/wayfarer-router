@@ -26,6 +26,13 @@
  *   (2026-10-21 11:25 to 2026-10-22 00:44, five to six clients): received packets never stood still for
  *   even 10 s while a client was listed. Those hours always had an awake client — one of them was the
  *   machine recording the counters — so that a quieter night stays above a minute is an assumption.
+ * * **After a repair, none of the clients that were listed when it began has come back** by the time the
+ *   rung has settled. A radio nobody can join has no clients, and no clients is otherwise not a fault — so
+ *   without this rule the first rung always looked like a recovery. Measured on the bench board,
+ *   2026-10-31: the restart at 16:01:08 left the adapter hung (`rx_packets` stood at 5348665 for three
+ *   minutes, no station listed), the watch reported `enabled, 0 client(s)`, reset its ladder and never
+ *   reached the USB rung; unbinding and binding the device by hand at 16:03:58 brought two clients back
+ *   and 283 received packets in the next 20 s.
  *
  * ## What it does
  *
@@ -83,6 +90,8 @@ interface Target {
   rxHistory: Array<{ at: number; rx: number }>;
   notEnabledLooks: number;
   rung: 0 | 1 | 2;
+  /** Clients listed when the ladder's last rung was taken: the ones a working radio gets back. */
+  clientsAtRepair: number;
   lastRepairAt: number | null;
   ladderStartedAt: number | null;
   gaveUp: boolean;
@@ -164,6 +173,8 @@ export function watchAccessPointRadio(input: {
 
     if (settling) return `${target.iface}: a repair is settling`;
 
+    const abandoned = target.rung > 0 && target.clientsAtRepair > 0 && enabled && stations === 0;
+
     const why =
       errors.length > 0
         ? `the kernel logged ${String(errors.length)} error(s) from its device: ${errors[errors.length - 1]!.slice(0, 160)}`
@@ -173,7 +184,9 @@ export function watchAccessPointRadio(input: {
             : `hostapd reports ${status.state ?? 'no state'} rather than ENABLED`
           : silentFor !== null
             ? `${String(stations)} client(s) listed and ${String(received)} packet(s) received in ${String(Math.round(silentFor / 1_000))} s`
-            : null;
+            : abandoned
+              ? `none of the ${String(target.clientsAtRepair)} client(s) listed before the repair came back within ${String(Math.round(REPAIR_SETTLE_MS / 1_000))} s`
+              : null;
 
     // Not yet judged down, and not up either: neither a fault nor a recovery. Declaring recovery here
     // would reset the ladder every time hostapd stayed down for less than two looks after a repair.
@@ -199,6 +212,9 @@ export function watchAccessPointRadio(input: {
     }
 
     target.lastRepairAt = at;
+    // The first rung counts the clients that were there; a later one keeps that count, since by then the
+    // hung radio has lost them all.
+    if (target.rung === 0) target.clientsAtRepair = stations;
     target.rxHistory = [];
     target.notEnabledLooks = 0;
 
@@ -272,6 +288,7 @@ export function watchAccessPointRadio(input: {
           rxHistory: [],
           notEnabledLooks: 0,
           rung: 0,
+          clientsAtRepair: 0,
           lastRepairAt: null,
           ladderStartedAt: null,
           gaveUp: false,

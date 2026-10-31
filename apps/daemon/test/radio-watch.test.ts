@@ -189,6 +189,30 @@ test('a trickle of stray packets does not hide a hung radio (2026-10-30: 17 pack
   assert.deepEqual(b.calls, ['restart wf-hostapd@wlx90de8047b4b4.service']);
 });
 
+test('a restart nobody can rejoin is not a recovery (2026-10-31: enabled, 0 clients, still hung)', async () => {
+  const b = bench();
+  b.state.stations = 3;
+  await b.watch.check();
+  b.advance(SILENT_WITH_CLIENTS_MS + 1_000);
+  await b.watch.check();
+  assert.deepEqual(b.calls, ['restart wf-hostapd@wlx90de8047b4b4.service']);
+  b.state.stations = 0;
+  b.advance(REPAIR_SETTLE_MS);
+  await b.watch.check();
+  assert.deepEqual(b.calls, ['restart wf-hostapd@wlx90de8047b4b4.service', `rebind ${USB_DEVICE}`, 'restart wf-hostapd@wlx90de8047b4b4.service']);
+  assert.deepEqual(b.events.map((event) => event.kind), ['radio.restarted', 'radio.usb-rebound']);
+  // The clients come back after the rebind and the radio receives: that is the recovery.
+  b.state.stations = 2;
+  b.advance(REPAIR_SETTLE_MS);
+  for (let i = 0; i < 3; i += 1) {
+    b.state.rx += 100;
+    await b.watch.check();
+    b.advance(30_000);
+  }
+  assert.equal(b.calls.length, 3);
+  assert.deepEqual(b.events.map((event) => event.kind), ['radio.restarted', 'radio.usb-rebound', 'radio.recovered']);
+});
+
 test('frames still being sent do not hide a radio that receives nothing', async () => {
   // Measured on 2026-10-22: from 19:28:50 the adapter received nothing while hostapd handed it about one
   // frame a second, and the kernel stayed quiet until 19:34:10.
