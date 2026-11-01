@@ -435,3 +435,16 @@ not established.
     16:03:40.
 * *Not established.* Whether this client's departure triggers the stall, or the stall makes the
   firmware drop that client first. Two events are a coincidence worth testing, not a proof.
+
+**2026-11-01 19:43: a third stall, and the lead above weakened.** The flight recorder's in-memory
+samples show received packets at 30/s up to 19:43:07, then none from 19:43:08. The kernel logged
+`Message 00002ced (seq 4) timeout` at 19:43:12 and `timed out waiting for pending tx` at 19:43:13, and
+the driver reloaded the firmware. The radio watch acted on those errors at 19:43:18–19 and restarted
+hostapd. Five clients were back by 19:43:30. Clients had no traffic for about 14 s; with the rejoin,
+about 22 s.
+
+This time `44:af:28:f9:14:b5` (`Yandex-Station-Max`) did not leave first. It stayed listed, and its
+inactivity grew from 19:43:08 like every other client's. So "that client's departure starts it" does
+not hold for this stall. Either there are two kinds of stall, or the departures on 2026-10-30 and
+2026-10-31 were consequences. No `.tgz` was written: the recorder wants 20 s with nothing received,
+and the watch's restart came first.
