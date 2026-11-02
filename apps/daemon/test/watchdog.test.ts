@@ -35,6 +35,8 @@ function harness(options: {
   policy?: Partial<WatchdogPolicy>;
   /** Makes each probe take real time, so the round budget can be exercised. */
   probeCostMs?: number;
+  /** The member a person chose for `g`. */
+  preferred?: string;
 }) {
   const events: { kind: string; summary: string }[] = [];
   const selected: string[] = [];
@@ -82,7 +84,7 @@ function harness(options: {
   const watchdog = createWatchdog({
     core,
     selector: 'wf-selector',
-    selections: async () => ({ groups: [{ id: 'g', members }], egress: { kind: 'group', id: 'g' } }),
+    selections: async () => ({ groups: [{ id: 'g', members, preferred: options.preferred ?? null }], egress: { kind: 'group', id: 'g' } }),
     guards: async () => [],
     policy: () => ({ ...POLICY, ...options.policy }),
     record: (event) => events.push({ kind: event.kind, summary: event.summary }),
@@ -219,6 +221,36 @@ test('a member that has worked is held for its fail streak, as before', async ()
   await watchdog.runOnce(); // a healthy
   await watchdog.runOnce(); // a fails once: held
   assert.deepEqual(selected, []);
+});
+
+test('a chosen member is taken and held although it fails on jitter (2026-11-02: Poland over Germany)', async () => {
+  const jittery = [20, 900, 30, 880];
+  const { watchdog, selected } = harness({ delays: { de: [10, 11, 12, 10], pl: jittery }, now: 'de', preferred: 'pl' });
+  await watchdog.runOnce();
+  assert.deepEqual(selected, ['pl']);
+  await watchdog.runOnce();
+  await watchdog.runOnce();
+  assert.deepEqual(selected, ['pl'], 'a member that answers is not left for answering unevenly');
+});
+
+test('a chosen member that answers nothing for its fail streak is left, and returned to when it answers', async () => {
+  const good = [20, 21, 22, 20];
+  const silent = [null, null, null, null];
+  const delays = { pl: [...good, ...silent, ...silent, ...good], de: [30, 31, 32, 30] };
+  const { watchdog, selected } = harness({ delays, now: 'pl', preferred: 'pl' });
+  await watchdog.runOnce(); // answers: held
+  await watchdog.runOnce(); // silent once: held
+  assert.deepEqual(selected, []);
+  await watchdog.runOnce(); // silent twice: let go
+  assert.deepEqual(selected, ['de']);
+  await watchdog.runOnce(); // answers again: back
+  assert.deepEqual(selected, ['de', 'pl']);
+});
+
+test('a choice naming no member of the group is no choice', async () => {
+  const { watchdog, selected } = harness({ delays: { a: [null], b: [30, 31, 32, 30] }, now: 'a', preferred: 'gone' });
+  await watchdog.runOnce();
+  assert.deepEqual(selected, ['b']);
 });
 
 test('a group that recovers takes the egress back from the fallback', async () => {

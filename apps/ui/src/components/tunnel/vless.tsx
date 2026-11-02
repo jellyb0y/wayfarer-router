@@ -126,6 +126,18 @@ export function VlessEditor({ index, tunnel }: { index: number; tunnel: Tunnel }
           help="Used when this is carried over WebSocket, gRPC or HTTP."
         />
         <TextField
+          pointer={`${base}/mode`}
+          label="XHTTP mode"
+          value={config['mode']}
+          help="Only for XHTTP: auto, packet-up, stream-up or stream-one, as the link gave it."
+        />
+        <TextField
+          pointer={`${base}/extra`}
+          label="XHTTP extra settings"
+          value={config['extra']}
+          help="Only for XHTTP: the link's extra parameter, a JSON object, passed to the client as it is."
+        />
+        <TextField
           pointer={`${base}/host`}
           label="Host header"
           value={config['host']}

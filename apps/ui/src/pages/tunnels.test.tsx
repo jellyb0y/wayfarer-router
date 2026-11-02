@@ -350,9 +350,11 @@ describe('a group: a subscription, whose members are what the feed offers', () =
       { id: 'pl', name: 'Poland · Warsaw', node: 'vless://198.51.100.2:8080', protocol: 'vless', config: {} },
     ];
     await renderScreen(<Tunnels />, withFeeds([feed({ members })]));
-    expect(await screen.findByText(/Germany · Frankfurt/)).toBeTruthy();
-    expect(screen.getByText(/Poland · Warsaw/)).toBeTruthy();
-    expect(screen.getByText('2 member(s)')).toBeTruthy();
+    // Each name is also an option of "Member to use", so the list is looked at on its own.
+    await screen.findByText('2 member(s)');
+    const list = within(document.querySelector('.member-list') as HTMLElement);
+    expect(list.getByText(/Germany · Frankfurt/)).toBeTruthy();
+    expect(list.getByText(/Poland · Warsaw/)).toBeTruthy();
     // No member field is a control.
     expect(document.querySelector('[data-pointer^="/groups/0/members"]')).toBeNull();
   });

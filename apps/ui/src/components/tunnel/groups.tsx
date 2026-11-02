@@ -22,7 +22,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiFailure, api, type GroupRefreshResult } from '../../lib/api.ts';
 import { readAt, useDraft } from '../../lib/draft.ts';
-import { Card, CheckField, Fold, NumberField, SecretField, TextField } from '../ui/index.tsx';
+import { Card, CheckField, Fold, NumberField, SecretField, SelectField, TextField } from '../ui/index.tsx';
 import { CarrierFields } from './common.tsx';
 import { TunnelTest } from './test.tsx';
 
@@ -65,6 +65,7 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
           const id = String(group['id']);
           const members = (group['members'] as Group[] | undefined) ?? [];
           const last = group['lastRefresh'] as Record<string, unknown> | undefined;
+          const preferred = typeof group['preferred'] === 'string' ? group['preferred'] : null;
 
           return (
             <li key={id} className="tunnel-item">
@@ -89,20 +90,41 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
                 </div>
               </dl>
 
+              {/*
+                * The choice is an edit like any other and takes effect when applied; the watchdog then
+                * moves the group within a round. "In use" stays the watchdog's reading, so a choice it
+                * had to leave because the member stopped answering shows as chosen but not in use.
+                */}
+              <SelectField
+                pointer={`/groups/${index}/preferred`}
+                label="Member to use"
+                value={preferred}
+                options={members.map((member) => ({ value: String(member['id']), title: String(member['name'] ?? member['id']) }))}
+                absent={{ title: 'The healthiest one (the device chooses)', write: undefined }}
+                help="A chosen member is kept while it answers at all; if it stops answering, the device uses another and comes back to it."
+              />
+
               <ul className="member-list">
                 {members.map((member) => {
-                  const reading = readings.get(String(member['id']));
+                  const memberId = String(member['id']);
+                  const reading = readings.get(memberId);
                   const selected = reading?.note?.includes('selected') === true;
                   return (
-                    <li key={String(member['id'])}>
+                    <li key={memberId}>
                       {String(member['name'] ?? member['id'])}
                       <span className="muted"> · {String(member['node'] ?? '')}</span>
                       <span className={reading?.state === 'healthy' ? 'ok' : 'muted'}>
                         {' · '}
                         {reading === undefined ? 'not measured yet' : reading.state}
                         {selected ? ', in use' : ''}
+                        {preferred === memberId ? ', chosen' : ''}
                       </span>
-                      <TunnelTest subject={{ groupId: id, memberId: String(member['id']) }} />
+                      {preferred === memberId ? null : (
+                        <button type="button" title="Keep this group on this member. Takes effect when applied." onClick={() => draft.set(`/groups/${index}/preferred`, memberId)}>
+                          Use this
+                        </button>
+                      )}
+                      <TunnelTest subject={{ groupId: id, memberId }} />
                     </li>
                   );
                 })}

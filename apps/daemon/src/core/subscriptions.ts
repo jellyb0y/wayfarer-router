@@ -98,8 +98,13 @@ export function refreshGroup(input: { document: ProfileDocument; groupId: string
     members.push(member);
   }
 
+  // A choice of a member that is gone is no choice: dropped, and said, so the group is the watchdog's again.
+  const { preferred, ...rest } = group;
+  const keepsChoice = preferred !== undefined && members.some((member) => member.id === preferred);
+  if (preferred !== undefined && !keepsChoice) notes.push(`the chosen member ${preferred} is no longer offered; the group chooses on its own again`);
+  const next = { ...rest, members, ...(keepsChoice ? { preferred } : {}) };
   return {
-    document: { ...document, groups: document.groups.map((entry) => (entry.id === groupId ? { ...entry, members } : entry)) },
+    document: { ...document, groups: document.groups.map((entry) => (entry.id === groupId ? next : entry)) },
     added,
     updated,
     removed,

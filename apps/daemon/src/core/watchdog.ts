@@ -25,6 +25,7 @@ import {
   score,
   summarise,
   type ProbeThresholds,
+  type SelectionDecision,
   type TunnelHealth,
 } from './health.ts';
 import type { CoreApi, ProxyEntry } from '../platform/core-api.ts';
@@ -44,7 +45,8 @@ import type { Liveness, LivenessBasis, LivenessMethod, LivenessSubject } from '.
 
 /** A group's selector and its members, and the egress — see `WatchdogDeps.selections`. */
 export interface WatchdogSelections {
-  groups: { id: string; members: string[] }[];
+  /** `preferred`: the member a person chose (`Group.preferred` in the profile), or `null` for none. */
+  groups: { id: string; members: string[]; preferred?: string | null }[];
   egress: { kind: 'group' | 'tunnel'; id: string } | null;
 }
 
@@ -290,6 +292,8 @@ export function createWatchdog(deps: WatchdogDeps): {
   const failStreaks: Record<string, number> = {};
   /** What each tunnel was last seen as, so a transition can be recorded and a steady state cannot. */
   const lastHealthy: Record<string, boolean> = {};
+  /** Consecutive rounds in which nothing answered at all, per tunnel. A chosen member is let go on this alone. */
+  const silentStreaks: Record<string, number> = {};
   /** Members this process has seen healthy at least once; only those are protected by stickiness. */
   const everHealthy = new Set<string>();
   /** Consecutive dead readings per guarded tunnel, for the owner to read; nothing acts on them. */
@@ -764,6 +768,7 @@ export function createWatchdog(deps: WatchdogDeps): {
       }
       const entry = summarise({ tunnelId: outbound, latenciesMs: latencies, attempted: policy.probes.count }, policy.probes);
       failStreaks[outbound] = entry.healthy ? 0 : (failStreaks[outbound] ?? 0) + 1;
+      silentStreaks[outbound] = entry.medianMs === null ? (silentStreaks[outbound] ?? 0) + 1 : 0;
       if (entry.healthy) everHealthy.add(outbound);
 
       /*
@@ -847,16 +852,30 @@ export function createWatchdog(deps: WatchdogDeps): {
         current !== null && current !== 'block' && everHealthy.has(current) === false
           ? { ...failStreaks, [current]: Math.max(failStreaks[current] ?? 0, policy.probes.failStreak) }
           : failStreaks;
-      const decision = decideSelection({
-        priority: [],
-        excluded: [],
-        health: members,
-        current,
-        sticky: policy.sticky,
-        onAllDown: 'block',
-        failStreaks: streaks,
-        failStreak: policy.probes.failStreak,
-      });
+      /*
+       * A member a person chose is held while it answers at all, and returned to as soon as it does; only
+       * a member that has answered nothing for `failStreak` rounds is let go — see `Group.preferred`.
+       */
+      const preferred = set.group.preferred ?? null;
+      const chosen = preferred === null ? undefined : members.find((entry) => entry.tunnelId === preferred);
+      const chosenAnswers = chosen !== undefined && (silentStreaks[chosen.tunnelId] ?? 0) < policy.probes.failStreak;
+      const decision: SelectionDecision = chosenAnswers
+        ? {
+            select: chosen.tunnelId,
+            change: current !== chosen.tunnelId,
+            reason: current === chosen.tunnelId ? 'the chosen member answers' : 'the chosen member answers, so the group goes back to it',
+            considered: members.map((entry) => ({ tunnelId: entry.tunnelId, healthy: entry.healthy, score: score(entry), excluded: false })),
+          }
+        : decideSelection({
+            priority: [],
+            excluded: chosen === undefined ? [] : [chosen.tunnelId],
+            health: members,
+            current,
+            sticky: policy.sticky,
+            onAllDown: 'block',
+            failStreaks: streaks,
+            failStreak: policy.probes.failStreak,
+          });
       if (!decision.change) {
         groupOutcomes.push({ id: set.group.id, selected: current, changed: false, reason: decision.reason, members });
         continue;

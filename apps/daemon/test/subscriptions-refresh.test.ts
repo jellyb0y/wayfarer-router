@@ -118,6 +118,18 @@ test('two nodes on one front that differ only by path are two members (2026-11-0
   assert.deepEqual(outcome.document.groups[0]!.members.map((entry) => entry.name), ['PL', 'DE']);
 });
 
+test('a chosen member the feed drops takes the choice with it; one it keeps keeps it', () => {
+  const withChoice = (preferred: string) => {
+    const document = documentWith([member('de', 'de.example'), member('pl', 'pl.example')]);
+    return { ...document, groups: document.groups.map((group) => ({ ...group, preferred })) };
+  };
+  const dropped = refreshGroup({ document: withChoice('pl'), groupId: 'feed', nodes: [node('de.example', 'de')] });
+  assert.equal(dropped.document.groups[0]!.preferred, undefined);
+  assert.match(dropped.notes.join(' '), /chosen member pl is no longer offered/);
+  const kept = refreshGroup({ document: withChoice('de'), groupId: 'feed', nodes: [node('de.example', 'de')] });
+  assert.equal(kept.document.groups[0]!.preferred, 'de');
+});
+
 test('a member stored before the path joined the identity keeps its id', () => {
   const config = { server: 'front.example', port: 443, id: 'u', network: 'xhttp' as const, security: 'tls' as const, path: '/x/pl' };
   const stored: Group['members'][number] = { ...member('pl', 'front.example'), node: 'vless://front.example:443?security=tls&type=xhttp', config };

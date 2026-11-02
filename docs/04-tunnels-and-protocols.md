@@ -452,6 +452,18 @@ model is simpler and has nothing to keep in step: everything a subscription offe
   this process has not yet seen healthy is not held for `failStreak` rounds. Measured reason: the board's
   `claude` feed lists a REALITY node first that never answers, which would otherwise cost a minute or more of
   Claude after every core restart.
+* **A person can choose the member** (`Group.preferred`, 2026-11-02). Asked for after the watchdog kept
+  the za-stenoy.ru group on Germany for a day while the owner wanted Poland. The event log shows it was
+  doing what it was built to do: at 01:28 on 2026-11-01 it scored Germany R1 at 208, Poland R1 at 412
+  and Poland R2 at 383 (lower is better), and on 17:23 Germany R1 at 216 against Poland R1 at 359.
+  Pointing the core's selector by hand did not hold either. The watchdog respects a hand-made selection
+  only while that member stays healthy, and it was failing the 250 ms jitter limit about every 10–20
+  minutes. A core restart forgets the selection altogether. A chosen member is held while it answers
+  at all; latency and jitter do not move it. It is let go after `failStreak` rounds in which nothing
+  answered, and taken back the first round it answers again. Plain stickiness has no way back: once
+  moved, it stays. The choice is an edit to the profile and takes effect when applied. It changes no
+  generated file, so the apply is `hot`. A refresh that removes the chosen member drops the choice
+  and says so.
 * **One namespace.** Tunnel, group and member ids are all outbound tags; a collision is
   `duplicate_tunnel_id`. The migration renames a member that shares its group's id (`claude` had derived a
   tunnel named `claude`; found by a dry run against the board's profile).

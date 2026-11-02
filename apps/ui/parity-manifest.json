@@ -140,6 +140,10 @@
       "screen": "tunnels"
     },
     {
+      "pointer": "/groups/-/preferred",
+      "screen": "tunnels"
+    },
+    {
       "pointer": "/groups/-/refreshHours",
       "screen": "tunnels"
     },
@@ -364,6 +368,10 @@
       "screen": "tunnels"
     },
     {
+      "pointer": "/tunnels/-/config/extra",
+      "screen": "tunnels"
+    },
+    {
       "pointer": "/tunnels/-/config/fingerprint",
       "screen": "tunnels"
     },
@@ -385,6 +393,10 @@
     },
     {
       "pointer": "/tunnels/-/config/interfaceSuffix",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/mode",
       "screen": "tunnels"
     },
     {

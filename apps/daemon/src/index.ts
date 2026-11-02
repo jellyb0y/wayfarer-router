@@ -949,7 +949,9 @@ async function main(): Promise<void> {
       if (document === null) return { groups: [], egress: null };
       const egress = egressOf(document);
       return {
-        groups: document.groups.filter((group) => group.enabled).map((group) => ({ id: group.id, members: group.members.map((member) => member.id) })),
+        groups: document.groups
+          .filter((group) => group.enabled)
+          .map((group) => ({ id: group.id, members: group.members.map((member) => member.id), preferred: group.preferred ?? null })),
         egress: egress === null ? null : { kind: egress.kind, id: egress.id },
       };
     },

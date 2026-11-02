@@ -1053,6 +1053,21 @@ export const Group = Type.Object(
     onUnavailable: Source('person', Type.Union([Type.Literal('block'), Type.Literal('fall-through')], { default: 'block' })),
     members: Type.Array(GroupMember, { maxItems: 64, default: [] }),
     /**
+     * The member a person chose, by id; absent means the watchdog chooses.
+     *
+     * Not the same as sticky. Sticky keeps whatever the group is on while it is healthy, and once it has
+     * moved it stays where it moved; a member that fails on jitter alone counts as failed. A chosen member
+     * is held while it answers at all — jitter and latency do not move it — and when it has answered
+     * nothing for `failStreak` rounds the group goes to the best other member and **comes back** the
+     * first round it answers again. Asked for on 2026-11-02: the watchdog kept a group on Germany, the
+     * owner wanted Poland, and the only way to say so was the core's selector, which the next fault or
+     * restart forgets.
+     *
+     * In the profile, like every other choice a person makes about a group. A member a refresh removes
+     * takes the choice with it (`core/subscriptions.ts`).
+     */
+    preferred: Type.Optional(Source('person', Identifier)),
+    /**
      * What the device has learned by fetching it. Observations, not intent — kept here so a profile
      * moved to another device arrives honest about never having been refreshed *there*.
      */
