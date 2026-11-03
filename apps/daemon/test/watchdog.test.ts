@@ -38,6 +38,7 @@ function harness(options: {
   /** The member a person chose for `g`. */
   preferred?: string;
 }) {
+  const closed: { selector: string; keep: string }[] = [];
   const events: { kind: string; summary: string }[] = [];
   const selected: string[] = [];
   const mainSelected: string[] = [];
@@ -79,6 +80,10 @@ function harness(options: {
       }
       return { ok: true, message: `selected ${member}` };
     },
+    closeThrough: async (selector, keep) => {
+      closed.push({ selector, keep });
+      return 3;
+    },
   };
 
   const watchdog = createWatchdog({
@@ -91,7 +96,7 @@ function harness(options: {
     log: () => {},
   });
 
-  return { watchdog, events, selected, mainSelected, asked };
+  return { watchdog, events, selected, mainSelected, asked, closed };
 }
 
 test('a core that is not answering decides nothing at all', async () => {
@@ -245,6 +250,20 @@ test('a chosen member that answers nothing for its fail streak is left, and retu
   assert.deepEqual(selected, ['de']);
   await watchdog.runOnce(); // answers again: back
   assert.deepEqual(selected, ['de', 'pl']);
+});
+
+test('a move to the chosen member takes the open connections with it, and no other move does (2026-11-03)', async () => {
+  const chosen = harness({ delays: { de: [10, 11, 12, 10], pl: [40, 41, 42, 40] }, now: 'de', preferred: 'pl' });
+  await chosen.watchdog.runOnce();
+  assert.deepEqual(chosen.closed, [{ selector: 'g', keep: 'pl' }]);
+  assert.ok(chosen.events.some((event) => event.kind === 'health.connections-moved'));
+  await chosen.watchdog.runOnce();
+  assert.equal(chosen.closed.length, 1, 'holding the chosen member closes nothing');
+
+  const own = harness({ delays: { dead: [null], good: [30, 31, 32, 30] }, now: 'dead' });
+  await own.watchdog.runOnce();
+  assert.deepEqual(own.selected, ['good']);
+  assert.deepEqual(own.closed, [], 'the watchdog\'s own move leaves connections to the sticky policy');
 });
 
 test('a choice naming no member of the group is no choice', async () => {

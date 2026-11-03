@@ -464,6 +464,17 @@ model is simpler and has nothing to keep in step: everything a subscription offe
   moved, it stays. The choice is an edit to the profile and takes effect when applied. It changes no
   generated file, so the apply is `hot`. A refresh that removes the chosen member drops the choice
   and says so.
+  *Corrected 2026-11-03: choosing moved only new connections.* The owner chose Germany R2 in the
+  panel and "nothing happened". The event log had the group selector on it at 20:04:33, within a
+  round of the apply, yet at 20:05:39 `GET /connections` showed 33 connections still carried by
+  Poland R1 against 16 by Germany R2. With `policy.sticky` on, every selector is generated with
+  `interrupt_exist_connections: false`, and the core then moves only new connections; long-lived ones
+  (messengers, streams) stay on the old member indefinitely. The reasoning that missed it treated a
+  selector change as the switch itself. It is the switch for new connections only. Now a move *to* the
+  chosen member also closes the group's connections carried by any other member
+  (`CoreApi.closeThrough`, event `health.connections-moved`), and they reopen through the chosen one.
+  The watchdog's own moves still leave connections to the sticky policy. A choice is a command;
+  sticky exists to protect connections from the watchdog's judgement, not from the owner's.
 * **One namespace.** Tunnel, group and member ids are all outbound tags; a collision is
   `duplicate_tunnel_id`. The migration renames a member that shares its group's id (`claude` had derived a
   tunnel named `claude`; found by a dry run against the board's profile).

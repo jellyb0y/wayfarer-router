@@ -61,6 +61,16 @@ export interface CoreApi {
   delay(outbound: string, url: string, timeoutMs: number): Promise<number | null>;
   /** Points a selector at one of its members. Applied by the running core; nothing restarts. */
   select(selector: string, member: string): Promise<{ ok: boolean; message: string }>;
+  /**
+   * Closes every connection that passes through `selector` but is carried by an outbound other than
+   * `keep`, and answers how many it closed, or null when the list could not be read.
+   *
+   * Needed because a selector with `interrupt_exist_connections: false` (the sticky policy) moves only
+   * new connections: measured on the board 2026-11-03, 20:04–20:05, a person chose Germany R2, the group
+   * selector was on it within a round, and 33 connections a minute later were still on Poland R1.
+   * Optional so the many stand-ins for this interface need not grow it.
+   */
+  closeThrough?(selector: string, keep: string): Promise<number | null>;
 }
 
 /**
@@ -197,6 +207,22 @@ export function createCoreApi(options: CoreApiOptions = {}): CoreApi & CoreLiven
       const result = await call('GET', '/connections', undefined, 5000, 8 * 1024 * 1024).catch(() => null);
       if (result === null || result.status !== 200) return null;
       return parseConnections(result.text);
+    },
+
+    async closeThrough(selector, keep) {
+      const result = await call('GET', '/connections', undefined, 5000, 8 * 1024 * 1024).catch(() => null);
+      if (result === null || result.status !== 200) return null;
+      const connections = parseConnections(result.text);
+      if (connections === null) return null;
+      // `chains` lists the carrying outbound first, then the selectors in front of it.
+      const moving = connections.filter((entry) => entry.chains.includes(selector) && entry.chains[0] !== keep);
+      let closed = 0;
+      for (const entry of moving) {
+        // 204 measured on sing-box 1.14.1, 2026-11-03, for an existing id and for an unknown one alike.
+        const answer = await call('DELETE', `/connections/${encodeURIComponent(entry.id)}`, undefined, 5000).catch(() => null);
+        if (answer !== null && (answer.status === 204 || answer.status === 200)) closed += 1;
+      }
+      return closed;
     },
 
     async select(selector, member) {

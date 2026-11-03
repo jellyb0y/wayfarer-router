@@ -898,6 +898,22 @@ export function createWatchdog(deps: WatchdogDeps): {
         detail: { group: set.group.id, from: current, to: decision.select, reason: decision.reason, considered: decision.considered },
       });
       deps.log('warn', { group: set.group.id, from: current, to: decision.select }, decision.reason);
+      /*
+       * A move to the member a person chose takes the open connections with it, whatever the sticky
+       * policy says. Sticky protects connections from the watchdog's own judgement; a choice is a command,
+       * and one that only new connections obey looks like nothing happened (2026-11-03, see `closeThrough`).
+       */
+      if (chosenAnswers && deps.core.closeThrough !== undefined) {
+        const closed = await deps.core.closeThrough(set.group.id, decision.select);
+        if (closed !== null && closed > 0) {
+          deps.record({
+            level: 'info',
+            kind: 'health.connections-moved',
+            summary: `closed ${String(closed)} connection(s) of group ${set.group.id} still on another member, so they reopen through ${decision.select}`,
+            detail: { group: set.group.id, to: decision.select, closed },
+          });
+        }
+      }
       groupOutcomes.push({ id: set.group.id, selected: decision.select, changed: true, reason: decision.reason, members });
     }
 
