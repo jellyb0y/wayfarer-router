@@ -1553,3 +1553,26 @@ the measured core schema (`core-schema-sing-box-1.14.0.json`, `/$defs/Outbound/o
 * **Invariants**: `group_layout_without_group_selector` and `group_layout_dangling_reference` refuse a
   layout the core could not run — the refresh never writes one, an import or an API edit could — and
   layout selector ids join the one namespace of outbound tags (`duplicate_tunnel_id`).
+
+### Verified on the bench board (2026-11-07, 04:12–04:20 MSK)
+
+Deployed `05c363f`; the group `cryptocat` was given the feed's URL and `format: sing-box`, applied (`hot`,
+nothing to do), then refreshed on request: *12 node(s) offered; selectors or rules changed*, 12 members
+added, the 4 xhttp members of the previous feed removed, applied as a `service` change. The previous
+`preferred: cryptocat-2` was a member of the old feed and was dropped with the note, as designed.
+
+* **The core runs it as the feed wrote it.** `/etc/wayfarer/core/config.json`: 8 `hysteria2` and 4 `vless`
+  outbounds for the group; `cryptocat` a selector over the two "Rapid Авто" urltests; the UDP selector over
+  the two "Rapid UDP" urltests plus `block`; urltests at `15s`/1000 and `60s`/300; the last three route
+  rules `ip_is_private → direct`, `udp:443 → reject`, `udp → <UDP selector>`. The core started cleanly, no
+  warnings in its journal.
+* **UDP and TCP take different nodes.** `GET /connections` on the core: 67 TCP connections on
+  `🇵🇱 R1 · HY` through "Польша · Rapid Авто" → `cryptocat` → `wf-selector`; UDP to port 3478 on
+  `🇵🇱 R2 · HY-UDP` through "Польша · Rapid UDP" → the UDP selector, past the main selector; UDP to
+  18020–18039 `direct` — the Hysteria 2 client's own port hopping to the server. Note what urltest chose for
+  TCP: an HY node, not VISION. That is its lowest-delay rule, not the list order, as recorded above.
+* **Choosing a country moves both.** `preferred` set to "Германия · Rapid Авто" and applied (`hot`): within
+  one watchdog round `cryptocat` was on it and the UDP selector on "Германия · Rapid UDP", and all 19 open
+  connections of the group were on `🇩🇪 R1 · HY`. Set back to Poland the same way, both selectors returned.
+* **End to end from a client on the access point**: `api.ipify.org` 200 in 0.31 s (exit `81.27.103.1`; a STUN
+  binding over UDP saw the same address), `generate_204` 204 in 0.24 s, `youtube.com` 200 in 0.42 s.
