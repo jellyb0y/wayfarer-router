@@ -477,7 +477,7 @@ export function extremeInventory(): Record<string, unknown> {
  * obfuscated tunnel has.
  */
 export function extremeProfileDocument(): Record<string, unknown> {
-  const protocols = ['openvpn', 'cloak-openvpn', 'vless', 'proxy'] as const;
+  const protocols = ['openvpn', 'cloak-openvpn', 'vless', 'hysteria2', 'proxy'] as const;
 
   return {
     meta: { name: LONGEST_NAME, schemaVersion: 7 },
@@ -541,6 +541,25 @@ export function extremeProfileDocument(): Record<string, unknown> {
               browserSignature: 'chrome',
               transport: 'direct',
             })),
+          },
+        };
+      }
+      /*
+       * The first Hysteria 2 tunnel is obfuscated, because the obfuscation password is drawn only when
+       * obfuscation is on — the same trap as the Reality fields. Every value invented.
+       */
+      if (protocol === 'hysteria2') {
+        return {
+          ...common,
+          protocol,
+          config: {
+            server: LONGEST_DOMAIN,
+            port: 8844,
+            serverPorts: ['18020:18039'],
+            password: { $set: true },
+            obfsPassword: nth === 0 ? { $set: true } : undefined,
+            serverName: LONGEST_DOMAIN,
+            alpn: ['h3'],
           },
         };
       }

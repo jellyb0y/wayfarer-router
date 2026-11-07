@@ -547,6 +547,10 @@ export const TUNNEL_BRANCHES = {
     { ...TunnelCommon, protocol: Source('person', Type.Literal('vless')), config: TUNNEL_CONFIGS.vless },
     { additionalProperties: false, $id: 'Tunnel_vless' },
   ),
+  hysteria2: Type.Object(
+    { ...TunnelCommon, protocol: Source('person', Type.Literal('hysteria2')), config: TUNNEL_CONFIGS.hysteria2 },
+    { additionalProperties: false, $id: 'Tunnel_hysteria2' },
+  ),
   proxy: Type.Object(
     { ...TunnelCommon, protocol: Source('person', Type.Literal('proxy')), config: TUNNEL_CONFIGS.proxy },
     { additionalProperties: false, $id: 'Tunnel_proxy' },
@@ -554,7 +558,7 @@ export const TUNNEL_BRANCHES = {
 } as const satisfies { [P in TunnelProtocol]: TSchema };
 
 export const Tunnel = Type.Union(
-  [TUNNEL_BRANCHES.openvpn, TUNNEL_BRANCHES['cloak-openvpn'], TUNNEL_BRANCHES.vless, TUNNEL_BRANCHES.proxy],
+  [TUNNEL_BRANCHES.openvpn, TUNNEL_BRANCHES['cloak-openvpn'], TUNNEL_BRANCHES.vless, TUNNEL_BRANCHES.hysteria2, TUNNEL_BRANCHES.proxy],
   {
     $id: 'Tunnel',
     description: 'A tunnel, which is one of the protocols this product runs. There is nothing else.',

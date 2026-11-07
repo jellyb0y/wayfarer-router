@@ -76,8 +76,9 @@ function planned(result: EntryPlanResult) {
 
 test('the catalogue is a list, and its count is a line', () => {
   // `proxy` joined on 2026-09-22 (Epic F, row F5). The list grew by a line and by nothing else,
-  // which is the property this assertion exists for rather than the number four.
-  assert.deepEqual([...TUNNEL_PROTOCOLS], ['openvpn', 'cloak-openvpn', 'vless', 'proxy']);
+  // which is the property this assertion exists for rather than the number four. `hysteria2` joined on
+  // 2026-11-07, for a feed whose UDP path is Hysteria 2.
+  assert.deepEqual([...TUNNEL_PROTOCOLS], ['openvpn', 'cloak-openvpn', 'vless', 'hysteria2', 'proxy']);
   assert.equal(CATALOGUE_LIST.length, TUNNEL_PROTOCOLS.length);
   // Every entry is reachable from the list, and every entry's id is the key it is filed under. A
   // mismatch here would let a refusal name one protocol while another was planned.
@@ -90,7 +91,7 @@ test('an entry is named after what the owner holds, never after what this device
   // `Xray` is the program that runs a VLESS subscription; the owner holds the subscription. The
   // rename is the whole correction, so it is asserted rather than trusted to survive an edit.
   const titles = CATALOGUE_LIST.map((entry) => entry.title);
-  assert.deepEqual(titles, ['OpenVPN', 'Cloak + OpenVPN', 'VLESS', 'Proxy']);
+  assert.deepEqual(titles, ['OpenVPN', 'Cloak + OpenVPN', 'VLESS', 'Hysteria 2', 'Proxy']);
   for (const title of titles) {
     assert.ok(!/xray|sing-?box|ck-client/i.test(title), `"${title}" names a program, not a thing an owner has`);
   }

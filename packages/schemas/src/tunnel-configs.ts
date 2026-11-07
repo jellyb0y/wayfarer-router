@@ -342,6 +342,60 @@ export const VlessConfig = Source('person', Type.Object(
 ));
 export type VlessConfig = Static<typeof VlessConfig>;
 
+/* ── Hysteria 2 ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * A server-side port range the client may hop across, in the core's own spelling: `18020:18039`.
+ *
+ * Seen on 2026-11-07 in the `za-stenoy.ru` feed served as sing-box JSON: every Hysteria 2 node carried
+ * `server_ports: ["18020:18039"]` or `["11640:11659"]` beside its `server_port`. A single port is also a
+ * range of one, and the core accepts both forms.
+ */
+export const Hysteria2PortRange = Type.String({ pattern: '^[0-9]{1,5}(:[0-9]{1,5})?$', maxLength: 11 });
+
+/**
+ * **Hysteria 2**, the QUIC-based protocol the proxy core runs natively.
+ *
+ * Added on 2026-11-07 for one feed: of the 16 nodes the `za-stenoy.ru` subscription offers in the core's
+ * JSON, 12 are Hysteria 2, and its routing sends all UDP through them. Its link form was already
+ * recognised and refused (`hysteria2://`), because nothing in the catalogue could store one.
+ *
+ * Marked `person` as a whole, for the reason `VlessConfig` gives, with **one exception, `insecure`.**
+ */
+export const Hysteria2Config = Source('person', Type.Object(
+  {
+    server: Type.String({ minLength: 1, maxLength: 253 }),
+    port: Type.Integer({ minimum: 1, maximum: 65535 }),
+    /** Extra server ports to hop across. The connection starts on `port`. */
+    serverPorts: Type.Optional(Type.Array(Hysteria2PortRange, { minItems: 1, maxItems: 16 })),
+    password: Secret({ kind: 'password', description: 'The Hysteria 2 password.' }),
+    /**
+     * The Salamander obfuscation password, when the server obfuscates. Salamander is the only kind the
+     * core implements, so the kind is not a field: a second value could only ever be refused.
+     */
+    obfsPassword: Type.Optional(Secret({ kind: 'password', description: 'The Salamander obfuscation password.' })),
+    /** The name presented in the TLS handshake. Absent means the server address is used. */
+    serverName: Type.Optional(Type.String({ maxLength: 253 })),
+    alpn: Type.Optional(Type.Array(Type.String({ maxLength: 16 }), { maxItems: 8 })),
+    /**
+     * Do not check the server's certificate. **Only a subscription may set this**, which is why it is
+     * marked `subscription` rather than inheriting `person`, and why no screen draws it.
+     *
+     * The owner's ruling, 2026-11-07: *if the subscription's configuration explicitly requires it, follow
+     * the subscription.* The feed that prompted it sets `tls.insecure: true` on every Hysteria 2 node;
+     * its operator says the certificate on those servers is self-signed and that the panel has no way to
+     * hand a sing-box client a pin. Refusing it would drop 12 of 16 nodes and the whole UDP path.
+     *
+     * On a person's own tunnel it is refused (`insecure_outside_feed`, `core/invariants.ts`): the
+     * product still has no switch a person flips to stop checking a server, and that decision is
+     * unchanged. What changed is that a feed which states the requirement is followed.
+     */
+    insecure: Type.Optional(Source('subscription', Type.Boolean())),
+  },
+  { additionalProperties: false, $id: 'Hysteria2Config' },
+));
+export type Hysteria2Config = Static<typeof Hysteria2Config>;
+
 /* ── Proxy ───────────────────────────────────────────────────────────────────────────────── */
 
 /**
@@ -433,7 +487,7 @@ export type ProxyConfig = Static<typeof ProxyConfig>;
 /* ── the catalogue, as one list ──────────────────────────────────────────────────────────── */
 
 /**
- * **The catalogue. Three entries, and the count is this object's length — never a structure.**
+ * **The catalogue. The count of entries is this object's length — never a structure.**
  *
  * Epic F adds Shadowsocks and WireGuard by appending a key here and the matching entry in the
  * daemon's `core/catalogue/index.ts`; the compiler requires the second. Nothing else in this project may switch on a
@@ -446,6 +500,7 @@ export const TUNNEL_CONFIGS = {
   openvpn: OpenVpnConfig,
   'cloak-openvpn': CloakOpenVpnConfig,
   vless: VlessConfig,
+  hysteria2: Hysteria2Config,
   proxy: ProxyConfig,
 } as const satisfies Record<string, TSchema>;
 
@@ -454,6 +509,7 @@ export const TUNNEL_PROTOCOL_TITLES = {
   openvpn: 'OpenVPN',
   'cloak-openvpn': 'Cloak + OpenVPN',
   vless: 'VLESS',
+  hysteria2: 'Hysteria 2',
   proxy: 'Proxy',
 } as const satisfies Record<keyof typeof TUNNEL_CONFIGS, string>;
 

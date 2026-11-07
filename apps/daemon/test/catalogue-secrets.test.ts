@@ -61,6 +61,12 @@ const CONFIGS = {
     network: 'tcp',
     security: 'tls',
   },
+  hysteria2: {
+    server: 'h.example.invalid',
+    port: 8844,
+    password: `${SENTINEL}-password`,
+    obfsPassword: `${SENTINEL}-obfs`,
+  },
   proxy: {
     type: 'socks',
     server: 'proxy.example.invalid',
@@ -120,10 +126,11 @@ test('no catalogue entry hides a credential under a key the drift check would pr
 
   /*
    * **And the sentinel has to have been found somewhere**, or this test is a loop over nothing that
-   * passes for ever. Two entries emit a credential into the object: VLESS's account and the proxy's
-   * password. The other two carry theirs in generated *files*, which is the gap named in the header.
+   * passes for ever. Three entries emit a credential into the object: VLESS's account, the proxy's
+   * password, and Hysteria 2's two passwords. The other two carry theirs in generated *files*, which is
+   * the gap named in the header.
    */
-  assert.deepEqual(checked.sort(), ['proxy/password', 'vless/uuid']);
+  assert.deepEqual(checked.sort(), ['hysteria2/obfs/password', 'hysteria2/password', 'proxy/password', 'vless/uuid']);
 });
 
 test('the recogniser matches a leaf and is not fooled by a similar-looking path', () => {

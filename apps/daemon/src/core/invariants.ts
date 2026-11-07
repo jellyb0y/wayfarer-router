@@ -118,6 +118,7 @@ export function checkInvariants(input: InvariantInput): Finding[] {
     ...checkRequirements(input),
     ...checkWirelessCredentials(input),
     ...checkTunnelReality(input),
+    ...checkInsecureOutsideFeed(input),
     ...checkProbeEndpoints(input),
     ...checkResourceTunnelReach(input),
     ...checkTunnelResourceOrder(input),
@@ -493,6 +494,31 @@ const SSID_MAX_BYTES = 32;
  * Disabled tunnels are skipped, on the same argument as the uplinks: refusing activation over the
  * configuration of something switched off makes the switch useless.
  */
+/**
+ * A person's tunnel may not turn certificate checking off. Only a subscription may (`Hysteria2Config`).
+ *
+ * The field is marked `subscription`, so no screen draws it, but the API accepts any document that
+ * validates — and a validating document is not the same as one somebody meant. Members of a group are
+ * not in `/tunnels` in the stored document this reads, so the feed's own nodes never reach this check.
+ */
+function checkInsecureOutsideFeed({ profile }: InvariantInput): Finding[] {
+  const findings: Finding[] = [];
+  profile.tunnels.forEach((tunnel, index) => {
+    if (tunnel.protocol !== 'hysteria2' || tunnel.config.insecure !== true) return;
+    findings.push({
+      severity: 'error',
+      code: 'insecure_outside_feed',
+      message:
+        `Tunnel "${tunnel.name}" turns off checking that its server is who it claims to be. Only a ` +
+        'subscription that states the requirement may do that on this device; a tunnel made by hand may not.',
+      pointer: `/tunnels/${index}/config/insecure`,
+      hint: 'Remove the field. If the server needs it, add it through its subscription instead.',
+      detail: { protocol: 'hysteria2' },
+    });
+  });
+  return findings;
+}
+
 function checkTunnelReality({ profile }: InvariantInput): Finding[] {
   const findings: Finding[] = [];
 

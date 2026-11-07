@@ -591,8 +591,14 @@ test('an exempting mark removes a position from the required set and an unmarked
      *
      * 132 → 133 on 2026-11-02: `/groups/-/preferred`, the member a person chose for a group. Only a
      * person can make that choice; the watchdog's own choice is not stored.
+     *
+     * 133 → 136 on 2026-11-07: the Hysteria 2 catalogue entry. Three positions are new and `person`:
+     * `/tunnels/-/config/password`, `/tunnels/-/config/obfsPassword` and `/tunnels/-/config/serverPorts`;
+     * `server`, `port`, `serverName` and `alpn` are pointers other branches already contribute.
+     * `subscription` 20 → 21: `/tunnels/-/config/insecure`, which only a feed may set and no screen draws
+     * (`insecure_outside_feed` refuses it on a person's tunnel).
      */
-    { person: 133, generated: 8, device: 4, subscription: 20, catalogue: 1 },
+    { person: 136, generated: 8, device: 4, subscription: 21, catalogue: 1 },
     'the source distribution changed. That is not necessarily wrong, but it is never incidental: ' +
       'every entry here is a decision about whether a person must be given a control. Re-derive it ' +
       'and say in the diff which field moved and why.',

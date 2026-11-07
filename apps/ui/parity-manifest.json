@@ -404,6 +404,14 @@
       "screen": "tunnels"
     },
     {
+      "pointer": "/tunnels/-/config/obfsPassword",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/password",
+      "screen": "tunnels"
+    },
+    {
       "pointer": "/tunnels/-/config/path",
       "screen": "tunnels"
     },
@@ -433,6 +441,10 @@
     },
     {
       "pointer": "/tunnels/-/config/serverName",
+      "screen": "tunnels"
+    },
+    {
+      "pointer": "/tunnels/-/config/serverPorts",
       "screen": "tunnels"
     },
     {

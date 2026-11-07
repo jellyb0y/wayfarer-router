@@ -219,6 +219,7 @@ export interface LivenessSubjectInput {
 import { openVpnEntry } from './openvpn.ts';
 import { cloakOpenVpnEntry } from './cloak-openvpn.ts';
 import { vlessEntry } from './vless.ts';
+import { hysteria2Entry } from './hysteria2.ts';
 import { proxyEntry } from './proxy.ts';
 
 /**
@@ -231,6 +232,7 @@ export const CATALOGUE: { readonly [P in TunnelProtocol]: CatalogueEntry<P> } = 
   openvpn: openVpnEntry,
   'cloak-openvpn': cloakOpenVpnEntry,
   vless: vlessEntry,
+  hysteria2: hysteria2Entry,
   proxy: proxyEntry,
 };
 

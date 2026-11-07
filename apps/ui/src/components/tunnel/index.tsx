@@ -19,6 +19,7 @@ import type { Tunnel } from './common.tsx';
 import { OpenVpnEditor } from './openvpn.tsx';
 import { CloakOpenVpnEditor } from './cloak.tsx';
 import { VlessEditor } from './vless.tsx';
+import { Hysteria2Editor } from './hysteria2.tsx';
 import { ProxyEditor } from './proxy.tsx';
 import { TunnelTest } from './test.tsx';
 
@@ -56,6 +57,7 @@ const EDITORS = {
   openvpn: OpenVpnEditor,
   'cloak-openvpn': CloakOpenVpnEditor,
   vless: VlessEditor,
+  hysteria2: Hysteria2Editor,
   proxy: ProxyEditor,
 } as const satisfies Record<TunnelProtocol, Editor>;
 
@@ -69,6 +71,7 @@ const BLANKS = {
   openvpn: () => ({ profile: undefined }),
   'cloak-openvpn': () => ({ profile: undefined, entryPoints: [] }),
   vless: () => ({ server: '', port: 443, network: 'tcp', security: 'tls' }),
+  hysteria2: () => ({ server: '', port: 443, password: '' }),
   // 1080 because a new proxy starts as SOCKS, and 1080 is the port a SOCKS proxy is reached on far
   // more often than any other. A blank port is a field somebody has to look up to fill.
   proxy: () => ({ type: 'socks', server: '', port: 1080 }),
@@ -114,7 +117,7 @@ export function TunnelEditor({ index, tunnel }: { index: number; tunnel: Tunnel 
     <>
       <Chosen index={index} tunnel={tunnel} />
       {/* Only where a throwaway client can stand in: an OpenVPN or Cloak tunnel is an interface of its own. */}
-      {protocol === 'vless' || protocol === 'proxy' ? (
+      {protocol === 'vless' || protocol === 'hysteria2' || protocol === 'proxy' ? (
         <TunnelTest subject={{ tunnelId: String(tunnel['id']), protocol, config: tunnel['config'] }} />
       ) : null}
     </>

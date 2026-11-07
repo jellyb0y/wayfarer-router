@@ -254,6 +254,15 @@ test('hy2:// is refused under the same name as hysteria2://', () => {
   assert.equal(failure.scheme, 'hysteria2');
 });
 
+test('a Hysteria 2 link is refused as an unread link form, not as a protocol this product does not run', () => {
+  // The catalogue runs Hysteria 2 since 2026-11-07; only the link has no parser. The other four still
+  // say "does not run", so the two refusals are told apart by what they claim.
+  const failure = refusal('hysteria2://pw@hy2.example.com:8443#Short');
+  assert.doesNotMatch(failure.reason, /does not run/);
+  assert.match(failure.reason, /not read here/);
+  assert.match(refusal('tuic://u:p@h.example.com:1').reason, /does not run/);
+});
+
 test('a line nothing recognises is REPORTED with its scheme, its position and the catalogue', () => {
   // "Skipping unsupported format" is the failure mode this design exists to avoid: a node that vanishes
   // without a word is how somebody ends up with a routing policy pointing at nothing.

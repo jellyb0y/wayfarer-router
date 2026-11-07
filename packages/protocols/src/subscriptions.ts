@@ -113,6 +113,12 @@ export interface RecognisedScheme {
   id: string;
   /** What a person calls it, for the refusal to use. */
   name: string;
+  /**
+   * True when the catalogue runs the protocol and only its link form is not read. Hysteria 2 joined the
+   * catalogue on 2026-11-07 for a feed served as sing-box JSON; its `hysteria2://` links still have no
+   * parser, and a refusal saying the product "does not run" it would now be false.
+   */
+  runsWithoutLink?: true;
   test(line: string): boolean;
 }
 
@@ -209,7 +215,12 @@ export function parseSubscription(
       // from "no parser here handles this".
       const known = recognised.find((candidate) => candidate.test(line));
       if (known !== undefined) {
-        report(known.id, `a ${known.name} link names something this product does not run. ${CATALOGUE_SENTENCE}`);
+        report(
+          known.id,
+          known.runsWithoutLink === true
+            ? `a ${known.name} link is not read here: the protocol runs from a subscription in the proxy core's JSON format, or from a tunnel made by hand. ${CATALOGUE_SENTENCE}`
+            : `a ${known.name} link names something this product does not run. ${CATALOGUE_SENTENCE}`,
+        );
         return;
       }
       const scheme = schemeOf(line);
@@ -582,7 +593,7 @@ export const RECOGNISED_NOT_RUN: readonly RecognisedScheme[] = [
   { id: 'vmess', name: 'VMess', test: (line) => /^vmess:\/\//i.test(line) },
   { id: 'shadowsocks', name: 'Shadowsocks', test: (line) => /^ss:\/\//i.test(line) },
   { id: 'trojan', name: 'Trojan', test: (line) => /^trojan:\/\//i.test(line) },
-  { id: 'hysteria2', name: 'Hysteria 2', test: (line) => /^(hysteria2|hy2):\/\//i.test(line) },
+  { id: 'hysteria2', name: 'Hysteria 2', runsWithoutLink: true, test: (line) => /^(hysteria2|hy2):\/\//i.test(line) },
   { id: 'tuic', name: 'TUIC', test: (line) => /^tuic:\/\//i.test(line) },
 ];
 

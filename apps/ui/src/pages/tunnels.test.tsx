@@ -292,7 +292,7 @@ describe('the catalogue is the only thing a tunnel can be', () => {
    * somebody fills in the fields above and saves a tunnel that still cannot run.
    */
   it('refuses to pretend it can edit a protocol it does not run', async () => {
-    await renderScreen(<Tunnels />, documentWith([openvpn({ protocol: 'hysteria2' })]));
+    await renderScreen(<Tunnels />, documentWith([openvpn({ protocol: 'wireguard' })]));
     expect(await screen.findByText(/names a protocol this device does not run/)).toBeTruthy();
   });
 });

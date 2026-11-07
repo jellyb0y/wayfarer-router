@@ -1433,3 +1433,77 @@ have replaced Poland. The reasoning that lost was the same one a step further ou
 wrapping is a service". `nodeIdentity` now appends `path=…` when the link carries one. A stored member
 is matched by the identity its own stored configuration gives under today's rules, which covers both
 older formats with one rule.
+
+## A feed in the proxy core's own format (2026-11-07)
+
+**The question.** The `za-stenoy.ru` subscription the bench board's `cryptocat` group follows answers the
+same URL two ways, chosen by the `User-Agent`. Measured on 2026-11-07 with `curl`:
+
+| `User-Agent` | Answer |
+|---|---|
+| `wayfarer` (what `platform/http.ts` sends) | `text/plain`, 844 bytes: base64 of **2** `vless://` links, R2 only |
+| `sing-box/1.12.0`, `SFA/1.12.0`, `Hiddify/2.5` | `application/json`, 7001 bytes, identical for all three: a whole client configuration |
+
+The JSON holds **16 nodes** — 4 VLESS (`tcp`, REALITY, `xtls-rprx-vision`) and 12 Hysteria 2 (Salamander
+obfuscation, `alpn: ["h3"]`, `server_ports` ranges, `tls.insecure: true`) — and a routing design the link
+form cannot express at all:
+
+* `route.rules`: sniff; hijack DNS; private addresses direct; **UDP to port 443 rejected**; **all other
+  UDP to the selector `🎮 Rapid UDP`**; `route.final` is the selector `🚀 VPN`.
+* `🚀 VPN` offers `🇵🇱 Польша · Rapid Авто` and `🇩🇪 Германия · Rapid Авто`, each a `urltest` over the
+  country's two VISION nodes and two Hysteria 2 nodes (60 s, tolerance 300 ms).
+* `🎮 Rapid UDP` offers the matching `… · Rapid UDP` pair, each a `urltest` over two *other* Hysteria 2
+  outbounds and the two VISION nodes (15 s, tolerance 1000 ms).
+* `inbounds` (tun, mixed), `dns` with fake IP, `log` and `experimental.cache_file` are a phone's client
+  configuration and have nothing to do on a router.
+
+So the link form loses the R1 servers, every Hysteria 2 node and the UDP/TCP split: on this device the
+group ran two of sixteen nodes with none of the routing.
+
+**What the feed is for**, as stated by its operator on 2026-11-07 (not measured
+here): game UDP goes over Hysteria 2 and never shares a QUIC connection with bulk TCP, because datagrams
+were lost under load when they did; QUIC on 443 is rejected so browsers fall back to TCP and stay off the
+UDP path. The `HY` and `HY-UDP` outbounds of each server are **byte for byte identical and must stay two
+outbounds**: in the core every `hysteria2` outbound is its own client with its own QUIC connection, and
+that separation is the point.
+
+### Decisions (the owner, 2026-11-07)
+
+* **Parse it ourselves into the catalogue** rather than embedding the feed's outbounds verbatim or running
+  a second core with the feed's file. It gives the most control. A second core was the weakest option for
+  a measured reason: UDP through a SOCKS hop to a local relay got no answer, 25 of 25 (the DNS table
+  above), and UDP is what this feed is for.
+* **Mirror what the core itself would do with the file** — nothing added from our side. The one
+  exception is the next point, stated as an exception.
+* **Choosing a country switches TCP and UDP together.** In the core's JSON these are two independent
+  selectors, and with no `default` the UDP one stays on its first option (Poland) whatever is chosen
+  for TCP. The operator calls that a gap in the template, not intent: in the Xray-JSON form each
+  country is one self-contained configuration, and choosing it switches both. The owner chose the
+  intent. This is the one place the device departs from the core's reading of the file.
+* **The feed's `urltest` chooses inside a country**, not the watchdog. Note what that means: `urltest`
+  picks the lowest probe delay and `tolerance` only holds the current pick; list order is a start, not a
+  priority. UDP can settle on VISION if VISION probes faster at the start. That is the core's behaviour,
+  which is what was asked for.
+* **The feed's rules apply automatically, and only to traffic already given to the group.** They may name
+  the feed's own outbounds, `direct` and `reject`; this device's own anchors stay above them.
+* **The interface shows what a client shows**: the options of the selector `route.final` names — here
+  the two countries. `urltest` groups and nodes are underneath.
+* **`tls.insecure`: if the feed states it, follow the feed.** The operator says the Hysteria 2
+  certificates are self-signed and the panel cannot hand a sing-box client a pin (`certificate_public_key_sha256`
+  in the core is an SPKI hash, not the certificate hash the Xray form pins, so the values would not carry
+  over anyway).
+
+### Step 1: Hysteria 2 is a catalogue entry
+
+`TUNNEL_CONFIGS.hysteria2` (`server`, `port`, `serverPorts`, `password`, `obfsPassword`, `serverName`,
+`alpn`, `insecure`) and `core/catalogue/hysteria2.ts`, which emits the core's own `hysteria2` outbound —
+no binary, no file, no port, no unit, like the proxy entry. The fields were read off the outbound entry in
+the measured core schema (`core-schema-sing-box-1.14.0.json`, `/$defs/Outbound/oneOf/6`).
+
+* **`insecure` is marked `subscription`** and no screen draws it. On a person's tunnel it is refused
+  (`insecure_outside_feed`): the product still has no switch a person flips to stop checking a server.
+  What changed is only that a feed stating the requirement is followed.
+* **Salamander is not a field.** It is the only obfuscation the core implements, so a second value could
+  only ever be refused; `obfsPassword` present means Salamander.
+* **A `hysteria2://` link is still not read**, and its refusal no longer says the product "does not run"
+  Hysteria 2, which became false. It says the link form is not read and where the protocol does come from.
