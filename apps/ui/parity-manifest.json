@@ -132,6 +132,10 @@
       "screen": "tunnels"
     },
     {
+      "pointer": "/groups/-/format",
+      "screen": "tunnels"
+    },
+    {
       "pointer": "/groups/-/name",
       "screen": "tunnels"
     },

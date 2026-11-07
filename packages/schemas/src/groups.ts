@@ -60,3 +60,48 @@ export function resourceCarriers(profile: Pick<ProfileDocument, 'tunnels' | 'gro
 export function enabledMembers(profile: Pick<ProfileDocument, 'groups'>): { group: Group; member: Group['members'][number] }[] {
   return (profile.groups ?? []).filter((group) => group.enabled).flatMap((group) => group.members.map((member) => ({ group, member })));
 }
+
+/**
+ * Where each selector of a layout group should point, given the option a person chose for the group.
+ *
+ * The group's own selector (tagged with its id) goes to the chosen option. **Every other `selector` of
+ * the layout goes to its option for the same country**, and this is the one place this product departs
+ * from what the core would do with the feed's file — the owner's decision of 2026-11-07. In the core's
+ * JSON the feed's UDP selector is independent and, with no `default`, stays on its first option whatever
+ * is chosen for TCP; the feed's operator calls that a gap in the template, and in the feed's Xray form
+ * choosing a country switches both. See docs/04-tunnels-and-protocols.md.
+ *
+ * "The same country" is read off the names the feed gives, and only this narrowly: the text before the
+ * first ` · ` (`🇩🇪 Германия · Rapid Авто` and `🇩🇪 Германия · Rapid UDP` share `🇩🇪 Германия`). A
+ * selector with no option, or with more than one, sharing that text is left where the core put it and
+ * reported in `unmatched` — a guess here would route somebody's traffic through a country they did not pick.
+ *
+ * Empty when nothing is chosen: then every selector starts where the feed says, as in the core.
+ */
+export function layoutChoices(group: Pick<Group, 'id' | 'members' | 'layout' | 'preferred'>): {
+  selections: { selector: string; option: string }[];
+  unmatched: string[];
+} {
+  const layout = group.layout;
+  const chosen = group.preferred;
+  if (layout === undefined || chosen === undefined) return { selections: [], unmatched: [] };
+  const top = layout.selectors.find((selector) => selector.id === group.id);
+  if (top === undefined || !top.options.includes(chosen)) return { selections: [], unmatched: [] };
+
+  const names = new Map<string, string>([
+    ...group.members.map((member): [string, string] => [member.id, member.name]),
+    ...layout.selectors.map((selector): [string, string] => [selector.id, selector.name]),
+  ]);
+  const country = (ref: string): string => (names.get(ref) ?? ref).split(' · ')[0]!.trim();
+  const wanted = country(chosen);
+
+  const selections = [{ selector: top.id, option: chosen }];
+  const unmatched: string[] = [];
+  for (const selector of layout.selectors) {
+    if (selector.id === top.id || selector.kind !== 'selector') continue;
+    const matching = selector.options.filter((option) => country(option) === wanted);
+    if (matching.length === 1) selections.push({ selector: selector.id, option: matching[0]! });
+    else unmatched.push(selector.id);
+  }
+  return { selections, unmatched };
+}

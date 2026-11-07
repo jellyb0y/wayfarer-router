@@ -17,8 +17,15 @@
  * Fetching, timing, applying and recording belong to `core/subscription-refresh.ts`.
  */
 
-import { nodeIdentity, nodeName, type ParsedNode } from '@wayfarer/protocols';
-import { isStoredSecret, type GroupMember, type ProfileDocument } from '@wayfarer/schemas';
+import { DIRECT, nodeIdentity, nodeName, type FeedRule, type FeedSelector, type ParsedNode } from '@wayfarer/protocols';
+import { isStoredSecret, type GroupLayout, type GroupMember, type ProfileDocument } from '@wayfarer/schemas';
+
+/** The structure a feed in the core's JSON gives its nodes, by the feed's own tags. */
+export interface FeedLayout {
+  final: string;
+  selectors: FeedSelector[];
+  rules: FeedRule[];
+}
 
 export interface RefreshOutcome {
   document: ProfileDocument;
@@ -26,6 +33,8 @@ export interface RefreshOutcome {
   updated: string[];
   removed: string[];
   notes: string[];
+  /** Whether the feed's selectors or rules changed — a change like a member's, though no member moved. */
+  layoutChanged: boolean;
 }
 
 /**
@@ -38,15 +47,21 @@ export interface RefreshOutcome {
  * * **A new node goes at the end**, as `<group>-<n>` with the first `n` no tunnel, group or member uses.
  * * A node of a protocol a member cannot be (only VLESS comes from a feed today) is left out with a note.
  */
-export function refreshGroup(input: { document: ProfileDocument; groupId: string; nodes: readonly ParsedNode[] }): RefreshOutcome {
+export function refreshGroup(input: {
+  document: ProfileDocument;
+  groupId: string;
+  nodes: readonly ParsedNode[];
+  /** Present for a feed in the core's JSON. Absent, the group has no layout and the watchdog chooses. */
+  layout?: FeedLayout;
+}): RefreshOutcome {
   const { document, groupId, nodes } = input;
   const group = document.groups.find((entry) => entry.id === groupId);
-  if (group === undefined) return { document, added: [], updated: [], removed: [], notes: [`no group "${groupId}"`] };
+  if (group === undefined) return { document, added: [], updated: [], removed: [], notes: [`no group "${groupId}"`], layoutChanged: false };
 
   const notes: string[] = [];
   const offered = new Map<string, ParsedNode>();
   for (const node of nodes) {
-    if (node.protocol !== 'vless') {
+    if (node.protocol !== 'vless' && node.protocol !== 'hysteria2') {
       notes.push(`"${nodeName(node)}" is ${node.protocol}, which a group member cannot be; left out`);
       continue;
     }
@@ -56,7 +71,11 @@ export function refreshGroup(input: { document: ProfileDocument; groupId: string
 
   const taken = new Set<string>([
     ...document.tunnels.map((tunnel) => tunnel.id),
-    ...document.groups.flatMap((entry) => [entry.id, ...entry.members.map((member) => member.id)]),
+    ...document.groups.flatMap((entry) => [
+      entry.id,
+      ...entry.members.map((member) => member.id),
+      ...(entry.layout?.selectors ?? []).map((selector) => selector.id),
+    ]),
   ]);
   const freshId = (): string => {
     let n = 1;
@@ -65,13 +84,8 @@ export function refreshGroup(input: { document: ProfileDocument; groupId: string
     taken.add(id);
     return id;
   };
-  const asMember = (id: string, identity: string, node: ParsedNode): GroupMember => ({
-    id,
-    name: nodeName(node).slice(0, 64),
-    node: identity,
-    protocol: 'vless',
-    config: node.config as GroupMember['config'],
-  });
+  const asMember = (id: string, identity: string, node: ParsedNode): GroupMember =>
+    ({ id, name: nodeName(node).slice(0, 64), node: identity, protocol: node.protocol, config: node.config }) as GroupMember;
 
   const added: string[] = [];
   const updated: string[] = [];
@@ -98,18 +112,79 @@ export function refreshGroup(input: { document: ProfileDocument; groupId: string
     members.push(member);
   }
 
-  // A choice of a member that is gone is no choice: dropped, and said, so the group is the watchdog's again.
-  const { preferred, ...rest } = group;
-  const keepsChoice = preferred !== undefined && members.some((member) => member.id === preferred);
-  if (preferred !== undefined && !keepsChoice) notes.push(`the chosen member ${preferred} is no longer offered; the group chooses on its own again`);
-  const next = { ...rest, members, ...(keepsChoice ? { preferred } : {}) };
+  const layout = input.layout === undefined ? undefined : storedLayout(input.layout, group, members, freshId, notes);
+  const layoutChanged = !sameValue(layout ?? null, group.layout ?? null);
+
+  // A choice that is gone is no choice: dropped, and said, so the group chooses on its own again. With a
+  // layout the choice is an option of the group's own selector; without one, a member.
+  const { preferred, layout: _previous, ...rest } = group;
+  const choosable =
+    layout === undefined
+      ? members.map((member) => member.id)
+      : (layout.selectors.find((selector) => selector.id === groupId)?.options ?? []);
+  const keepsChoice = preferred !== undefined && choosable.includes(preferred);
+  if (preferred !== undefined && !keepsChoice) notes.push(`the chosen ${layout === undefined ? 'member' : 'option'} ${preferred} is no longer offered; the group chooses on its own again`);
+  const next = { ...rest, members, ...(layout === undefined ? {} : { layout }), ...(keepsChoice ? { preferred } : {}) };
   return {
     document: { ...document, groups: document.groups.map((entry) => (entry.id === groupId ? next : entry)) },
     added,
     updated,
     removed,
     notes,
+    layoutChanged,
   };
+}
+
+/**
+ * The feed's layout in this product's ids.
+ *
+ * The selector `route.final` names takes **the group's id**: it is the group's tag in the core, which is
+ * what the egress, a rule or a guard names. Every other selector keeps the id it had under the same feed
+ * tag, or takes a fresh one, so a refresh that changes nothing changes no tag. References become member
+ * ids, selector ids or `direct`; one that resolves to nothing — its node was refused — is dropped with a
+ * note, as the parser already did for its own refusals.
+ */
+function storedLayout(
+  feed: FeedLayout,
+  group: ProfileDocument['groups'][number],
+  members: readonly GroupMember[],
+  freshId: () => string,
+  notes: string[],
+): GroupLayout {
+  const previous = new Map((group.layout?.selectors ?? []).filter((entry) => entry.id !== group.id).map((entry) => [entry.name, entry.id]));
+  const selectorIds = new Map<string, string>();
+  for (const selector of feed.selectors) {
+    selectorIds.set(selector.tag, selector.tag === feed.final ? group.id : (previous.get(selector.tag.slice(0, 64)) ?? freshId()));
+  }
+  const memberIds = new Map(members.filter((member) => member.node.startsWith('tag:')).map((member) => [member.node.slice(4), member.id]));
+  const ref = (tag: string): string | undefined => (tag === DIRECT ? DIRECT : (memberIds.get(tag) ?? selectorIds.get(tag)));
+
+  const selectors = feed.selectors.map((selector) => {
+    const options = selector.options.map(ref).filter((id): id is string => id !== undefined);
+    if (options.length < selector.options.length) notes.push(`"${selector.tag}" lost an option this device cannot run`);
+    const fallback = selector.default === undefined ? undefined : ref(selector.default);
+    return {
+      id: selectorIds.get(selector.tag)!,
+      name: selector.tag.slice(0, 64),
+      kind: selector.kind,
+      options,
+      ...(fallback === undefined ? {} : { default: fallback }),
+      ...(selector.url === undefined ? {} : { url: selector.url }),
+      ...(selector.interval === undefined ? {} : { interval: selector.interval }),
+      ...(selector.tolerance === undefined ? {} : { tolerance: selector.tolerance }),
+      ...(selector.idleTimeout === undefined ? {} : { idleTimeout: selector.idleTimeout }),
+      ...(selector.interruptExisting === undefined ? {} : { interruptExisting: selector.interruptExisting }),
+    };
+  });
+  const rules = feed.rules.flatMap((rule) => {
+    const to = rule.to === undefined ? undefined : ref(rule.to);
+    if (rule.to !== undefined && to === undefined) {
+      notes.push(`a rule to "${rule.to}" was left out: nothing this device runs is called that`);
+      return [];
+    }
+    return [{ ...rule, ...(to === undefined ? {} : { to }) }];
+  });
+  return { selectors, rules };
 }
 
 /**

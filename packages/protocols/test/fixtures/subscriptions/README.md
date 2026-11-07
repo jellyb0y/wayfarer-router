@@ -18,3 +18,10 @@ silently absent node.
 
 Credentials in these files are obviously fake — `0000…`-style UUIDs and passwords that say what they are.
 Nothing here is a secret, and nothing here should ever be replaced with something that is.
+
+## The one capture: `sing-box-za-stenoy.json`
+
+Unlike the rest, this file **is** a capture: the `za-stenoy.ru` feed's answer to `User-Agent:
+sing-box/1.12.0` on 2026-11-07 (`application/json`, 7001 bytes). Every `uuid`, `password`, `public_key` and
+`short_id` was replaced with an invented value by a script that then checked none of the originals remained;
+tags, servers, ports, ranges, selectors and rules are as served.

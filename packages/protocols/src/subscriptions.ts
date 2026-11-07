@@ -97,6 +97,11 @@ export type ParsedNode = {
    * but the caller can now say what was left behind instead of handing over a tunnel that looks complete.
    */
   ignoredParams?: string[];
+  /**
+   * The node's identity when the feed gives it one itself: `tag:<tag>` for an outbound in the core's
+   * JSON. Absent for a link, whose identity is derived from its endpoint (`nodeIdentity`).
+   */
+  identity?: string;
 } & TunnelDraft;
 
 export interface SubscriptionParser {
@@ -327,6 +332,7 @@ export function diffSubscription(previous: ParsedNode[], next: ParsedNode[]): Su
  * catalogue entry reachable from here always has these two.
  */
 export function nodeIdentity(node: ParsedNode): string {
+  if (node.identity !== undefined) return node.identity;
   const endpoint = endpointOf(node);
   const base = `${node.protocol}://${endpoint.server}:${endpoint.port}`;
   /*

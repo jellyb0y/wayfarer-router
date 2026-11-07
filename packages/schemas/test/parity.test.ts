@@ -597,8 +597,16 @@ test('an exempting mark removes a position from the required set and an unmarked
      * `server`, `port`, `serverName` and `alpn` are pointers other branches already contribute.
      * `subscription` 20 → 21: `/tunnels/-/config/insecure`, which only a feed may set and no screen draws
      * (`insecure_outside_feed` refuses it on a person's tunnel).
+     *
+     * Later on 2026-11-07, a feed in the core's JSON. `person` 136 → 137: `/groups/-/format`, which asks
+     * the feed for links or for the core's JSON — only the owner knows which answer a feed should give.
+     * `generated` 8 → 9: `/groups/-/layout/selectors/-/id`. `subscription` 21 → 39: a member may now be
+     * Hysteria 2, so its `password`, `obfsPassword`, `serverPorts` and `insecure` (+4); and the feed's
+     * layout — a selector's `name`, `kind`, `options`, `default`, `url`, `interval`, `tolerance`,
+     * `idleTimeout`, `interruptExisting` (+9) and a rule's `network`, `port`, `privateDestination`,
+     * `action`, `to` (+5). The feed writes all of them; none asks for a control.
      */
-    { person: 136, generated: 8, device: 4, subscription: 21, catalogue: 1 },
+    { person: 137, generated: 9, device: 4, subscription: 39, catalogue: 1 },
     'the source distribution changed. That is not necessarily wrong, but it is never incidental: ' +
       'every entry here is a decision about whether a person must be given a control. Re-derive it ' +
       'and say in the diff which field moved and why.',
@@ -641,6 +649,10 @@ test('an exempting mark removes a position from the required set and an unmarked
     all.filter((entry) => entry.source === 'generated').map((entry) => entry.pointer),
     [
       '/groups/-/id',
+      // 2026-11-07: a feed layout's selector id. The same argument as a member's id: the feed names its
+      // selectors by arbitrary text, and an outbound tag here must be an identifier, so only this
+      // product can write it — matched by the feed's tag on every refresh so it does not move.
+      '/groups/-/layout/selectors/-/id',
       '/groups/-/members/-/id',
       '/meta/createdAt',
       '/meta/updatedAt',

@@ -395,6 +395,35 @@ describe('a group: a subscription, whose members are what the feed offers', () =
     fireEvent.change(hours as HTMLInputElement, { target: { value: '0' } });
     expect((useDraft.getState().draft!['groups'] as Record<string, unknown>[])[0]!['refreshHours']).toBe(0);
   });
+  /*
+   * A feed in the core's JSON shows what a client shows for it: the options of its own selector — on the
+   * bench feed, two countries — and not its nodes, which the feed's urltest groups choose among. The
+   * owner's words, 2026-11-07: only what lies in the subscription is shown; the rest is under the hood.
+   */
+  it('offers a layout group’s own options as the choice, and folds its nodes away', async () => {
+    const members = [
+      { id: 'cc-1', name: '🇵🇱 Польша · R1 · VISION', node: 'tag:🇵🇱 Польша · R1 · VISION', protocol: 'vless', config: {} },
+      { id: 'cc-2', name: '🇩🇪 Германия · R1 · VISION', node: 'tag:🇩🇪 Германия · R1 · VISION', protocol: 'vless', config: {} },
+    ];
+    const layout = {
+      selectors: [
+        { id: 'group-01', name: '🚀 VPN', kind: 'selector', options: ['cc-3', 'cc-4'] },
+        { id: 'cc-3', name: '🇵🇱 Польша · Rapid Авто', kind: 'urltest', options: ['cc-1'] },
+        { id: 'cc-4', name: '🇩🇪 Германия · Rapid Авто', kind: 'urltest', options: ['cc-2'] },
+      ],
+      rules: [],
+    };
+    await renderScreen(<Tunnels />, withFeeds([feed({ format: 'sing-box', members, layout })]));
+    await screen.findByText('Connection to use');
+    const choice = document.querySelector('[data-pointer="/groups/0/preferred"] select') as HTMLSelectElement;
+    expect([...choice.options].map((option) => option.textContent)).toEqual([
+      'The feed’s default',
+      '🇵🇱 Польша · Rapid Авто',
+      '🇩🇪 Германия · Rapid Авто',
+    ]);
+    expect(screen.queryByText('Member to use')).toBeNull();
+    expect(screen.getByText('Nodes underneath (2)')).toBeTruthy();
+  });
 });
 
 describe('one proxy screen, three things it can speak', () => {

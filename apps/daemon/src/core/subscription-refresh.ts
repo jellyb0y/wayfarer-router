@@ -33,7 +33,7 @@
  *   stored profile is again what the device runs and the next round is not blocked by its own leftover.
  */
 
-import { nodeName, parseSubscription } from '@wayfarer/protocols';
+import { looksLikeSingBoxFeed, nodeName, parseSingBoxFeed, parseSubscription, type ParsedNode } from '@wayfarer/protocols';
 import type { Group, ProfileDocument } from '@wayfarer/schemas';
 import type { FetchTextResult } from '../platform/http.ts';
 import type { ProfileStore } from '../state/profiles.ts';
@@ -42,7 +42,7 @@ import { applyDocument, applyInFlight, type ApplyDeps, type ApplyOutcome } from 
 import { secretText } from './catalogue/values.ts';
 import type { ObserverRegistry } from './observers.ts';
 import { planDocument, type PlannedDocument } from './pipeline.ts';
-import { refreshGroup, refreshMayApply, type RefreshOutcome } from './subscriptions.ts';
+import { refreshGroup, refreshMayApply, type FeedLayout, type RefreshOutcome } from './subscriptions.ts';
 
 /** How often the round asks what is due. A refresh itself happens no more than `refreshHours` allows. */
 export const SUBSCRIPTION_CHECK_MS = 10 * 60_000;
@@ -139,8 +139,45 @@ function ignoredNote(ignored: RefreshReport['ignoredParams']): string {
   return ` (${String(ignored.length)} with unread link parameters)`;
 }
 
+/**
+ * What a feed's body says, read the way its group's `format` asks.
+ *
+ * A `sing-box` group that is answered with anything but the core's JSON changes nothing: reading links
+ * there would quietly drop the feed's selectors and rules, which are why the group asked for JSON.
+ */
+export function readFeed(format: 'links' | 'sing-box', text: string): {
+  nodes: ParsedNode[];
+  layout?: FeedLayout;
+  refused: string[];
+  dropped: string[];
+} {
+  if (format === 'links') {
+    const parsed = parseSubscription(text);
+    return {
+      nodes: parsed.nodes,
+      refused: parsed.failures.map((failure) => `line ${String(failure.line)} ${failure.scheme}: ${failure.reason}`),
+      dropped: [],
+    };
+  }
+  if (!looksLikeSingBoxFeed(text)) {
+    return { nodes: [], refused: ['the feed did not answer with the proxy core’s JSON configuration'], dropped: [] };
+  }
+  try {
+    const feed = parseSingBoxFeed(text);
+    return {
+      nodes: feed.nodes,
+      layout: { final: feed.final, selectors: feed.selectors, rules: feed.rules },
+      refused: feed.failures.map((failure) => `${failure.at}: ${failure.reason}`),
+      dropped: feed.dropped,
+    };
+  } catch (error) {
+    return { nodes: [], refused: [error instanceof Error ? error.message : String(error)], dropped: [] };
+  }
+}
+
 function describeChange(outcome: RefreshOutcome): string {
   const parts: string[] = [];
+  if (outcome.layoutChanged) parts.push('selectors or rules changed');
   if (outcome.added.length > 0) parts.push(`added ${outcome.added.join(', ')}`);
   if (outcome.updated.length > 0) parts.push(`updated ${outcome.updated.join(', ')}`);
   if (outcome.removed.length > 0) parts.push(`removed ${outcome.removed.join(', ')}`);
@@ -152,7 +189,13 @@ export function refreshSubscriptions(input: {
   profiles: ProfileStore;
   applyDeps: ApplyDeps;
   observers: ObserverRegistry;
-  fetchText: (url: string) => Promise<FetchTextResult>;
+  /** `userAgent` is what the feed is asked as; absent, the platform's own. See `Group.format`. */
+  fetchText: (url: string, options?: { userAgent?: string }) => Promise<FetchTextResult>;
+  /**
+   * The agent a `sing-box` group is fetched as: the installed core's own name and version, because a panel
+   * may pick its template by version as well as by name. Defaults to `sing-box`.
+   */
+  coreAgent?: () => Promise<string>;
   clockSynchronized: () => Promise<boolean | null>;
   record: RecordEvent;
   checkMs?: number;
@@ -202,7 +245,11 @@ export function refreshSubscriptions(input: {
     };
     const done = (ok: boolean, said: string): RefreshReport => Object.assign(report, { ok, said: `${subscription.id}: ${said}` });
 
-    const fetched = await input.fetchText(secretText(subscription.url));
+    const format = subscription.format ?? 'links';
+    const fetched = await input.fetchText(
+      secretText(subscription.url),
+      format === 'sing-box' ? { userAgent: (await input.coreAgent?.()) ?? 'sing-box' } : {},
+    );
     const at = now().toISOString();
     const stamp = (lastRefresh: LastRefresh): void => {
       profiles.recordSubscriptionRefresh(profileId, subscription.id, { ...lastRefresh, detail: clip(lastRefresh.detail) });
@@ -219,15 +266,18 @@ export function refreshSubscriptions(input: {
       return done(false, `fetch failed (${fetched.reason})`);
     }
 
-    const parsed = parseSubscription(fetched.text);
+    const parsed = readFeed(format, fetched.text);
     report.nodeCount = parsed.nodes.length;
     report.ignoredParams = parsed.nodes
       .filter((node) => node.ignoredParams !== undefined)
       .map((node) => ({ node: nodeName(node), params: node.ignoredParams! }));
     noteIgnored(subscription, report.ignoredParams);
-    const refusedLines = parsed.failures.map((failure) => `line ${String(failure.line)} ${failure.scheme}: ${failure.reason}`);
+    const refusedLines = parsed.refused;
     if (parsed.nodes.length === 0) {
-      const reason = `the feed offered no node this device can run (${String(parsed.failures.length)} line(s) refused)`;
+      const reason =
+        format === 'sing-box' && parsed.refused.length === 1
+          ? parsed.refused[0]!
+          : `the feed offered no node this device can run (${String(parsed.refused.length)} refused)`;
       stamp({ at, ok: false, detail: reason, nodeCount: 0 });
       input.record({
         level: 'warn',
@@ -245,11 +295,16 @@ export function refreshSubscriptions(input: {
     const row = profiles.get(profileId);
     if (row === null) return done(false, 'the profile went away during the fetch');
     const document = row.document as ProfileDocument;
-    const outcome = refreshGroup({ document, groupId: subscription.id, nodes: parsed.nodes });
+    const outcome = refreshGroup({
+      document,
+      groupId: subscription.id,
+      nodes: parsed.nodes,
+      ...(parsed.layout === undefined ? {} : { layout: parsed.layout }),
+    });
     report.added = outcome.added;
     report.updated = outcome.updated;
     report.removed = outcome.removed;
-    const changed = outcome.added.length + outcome.updated.length + outcome.removed.length > 0;
+    const changed = outcome.layoutChanged || outcome.added.length + outcome.updated.length + outcome.removed.length > 0;
     const offered = `${String(parsed.nodes.length)} node(s) offered${ignoredNote(report.ignoredParams)}`;
 
     if (!changed) {
@@ -321,6 +376,7 @@ export function refreshSubscriptions(input: {
         removed: outcome.removed,
         notes: outcome.notes,
         refused: refusedLines,
+        dropped: parsed.dropped,
         transaction: applied.transaction?.id,
       },
     });

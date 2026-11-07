@@ -1444,9 +1444,13 @@ same URL two ways, chosen by the `User-Agent`. Measured on 2026-11-07 with `curl
 | `wayfarer` (what `platform/http.ts` sends) | `text/plain`, 844 bytes: base64 of **2** `vless://` links, R2 only |
 | `sing-box/1.12.0`, `SFA/1.12.0`, `Hiddify/2.5` | `application/json`, 7001 bytes, identical for all three: a whole client configuration |
 
-The JSON holds **16 nodes** — 4 VLESS (`tcp`, REALITY, `xtls-rprx-vision`) and 12 Hysteria 2 (Salamander
+The JSON holds **12 nodes** — 4 VLESS (`tcp`, REALITY, `xtls-rprx-vision`) and 8 Hysteria 2 (Salamander
 obfuscation, `alpn: ["h3"]`, `server_ports` ranges, `tls.insecure: true`) — and a routing design the link
 form cannot express at all:
+
+*Corrected the same day:* this said 16 nodes and 12 Hysteria 2, and so did the first commit of the
+catalogue entry. The count was taken from the `urltest` groups, which name the twelve outbounds sixteen
+times between them; the parser's test counts the outbounds themselves.
 
 * `route.rules`: sniff; hijack DNS; private addresses direct; **UDP to port 443 rejected**; **all other
   UDP to the selector `🎮 Rapid UDP`**; `route.final` is the selector `🚀 VPN`.
@@ -1458,7 +1462,7 @@ form cannot express at all:
   configuration and have nothing to do on a router.
 
 So the link form loses the R1 servers, every Hysteria 2 node and the UDP/TCP split: on this device the
-group ran two of sixteen nodes with none of the routing.
+group ran two of twelve nodes with none of the routing.
 
 **What the feed is for**, as stated by its operator on 2026-11-07 (not measured
 here): game UDP goes over Hysteria 2 and never shares a QUIC connection with bulk TCP, because datagrams
@@ -1507,3 +1511,45 @@ the measured core schema (`core-schema-sing-box-1.14.0.json`, `/$defs/Outbound/o
   only ever be refused; `obfsPassword` present means Salamander.
 * **A `hysteria2://` link is still not read**, and its refusal no longer says the product "does not run"
   Hysteria 2, which became false. It says the link form is not read and where the protocol does come from.
+
+### Step 2: the group reads the core's JSON
+
+* **`Group.format`** (`links`, the default when absent, or `sing-box`) is a person's choice, not a
+  detection: both are valid answers from one feed, and which one is wanted depends on the feed. A
+  `sing-box` group is fetched as `sing-box/<installed core version>` — a panel may pick its template by
+  version as well as by name — and an answer that is not the core's JSON changes nothing, because reading
+  links there would silently drop the layout the group asked for.
+* **`parseSingBoxFeed`** (`packages/protocols/src/sing-box-feed.ts`) keeps every `vless` and `hysteria2`
+  outbound as a catalogue configuration, every `selector`/`urltest` with its options in order and its own
+  `url`, `interval`, `tolerance`, and the rules it can express (`network`, `port`, `ip_is_private`; route
+  or reject). `sniff` and DNS hijacking are what the generated configuration already does for every
+  client and are listed as dropped, as are `inbounds`, `dns`, `log` and `experimental`. Anything else is a
+  failure with a JSON Pointer into the feed — an unknown outbound type, a transport the catalogue has no
+  field for (gRPC's `service_name`, HTTPUpgrade), a rule matching a domain. A key nothing read is reported
+  in `ignoredParams`.
+* **A member from the JSON is identified by its tag** (`node: "tag:<tag>"`), not by its endpoint. The
+  endpoint identity would merge each `HY`/`HY-UDP` pair into one member, which is exactly what the feed
+  is built to prevent.
+* **`Group.layout`** stores the feed's selectors and rules in this product's ids. The selector
+  `route.final` names takes **the group's id**, so the egress, rules and guards name the group exactly as
+  before; every other selector keeps its id across refreshes by its feed tag. `Group.preferred` is then
+  one of that selector's options.
+* **Generated configuration** (`layoutOutbounds`, `layoutRules` in `generate/core-config.ts`): the
+  selectors and `urltest` groups as the feed wrote them, and the feed's rules **after every rule of this
+  device's own**, so they decide only among traffic that would otherwise reach `route.final`. They are
+  written only while the group is the egress; used any other way the group carries traffic without them,
+  and the planner says so (`group_feed_rules_unused`). Two additions, both stated: every non-group
+  `selector` also offers the fallback (`block` or `direct`), and the watchdog puts it there while the main
+  selector is on the fallback — the feed's rules send UDP to that selector past the main one, and it must
+  fall back with everything else.
+* **Watchdog**: for a layout group it selects no member — the feed's `urltest` groups do — but still
+  measures the members, because the egress falls back on "no member healthy" as before. It holds each
+  selector where the person's choice puts it (`layoutChoices`: the group's selector on the chosen option,
+  every other `selector` on its option for the same country, read as the text before the first ` · ` of
+  the feed's names; a selector with no single match is left alone) and closes connections still on
+  another option when it moves the group's selector, as for a chosen member.
+* **Interface**: a layout group offers its own selector's options ("Connection to use") and folds its
+  nodes away under "Nodes underneath".
+* **Invariants**: `group_layout_without_group_selector` and `group_layout_dangling_reference` refuse a
+  layout the core could not run — the refresh never writes one, an import or an API edit could — and
+  layout selector ids join the one namespace of outbound tags (`duplicate_tunnel_id`).

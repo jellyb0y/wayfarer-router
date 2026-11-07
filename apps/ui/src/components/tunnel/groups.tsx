@@ -66,6 +66,21 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
           const members = (group['members'] as Group[] | undefined) ?? [];
           const last = group['lastRefresh'] as Record<string, unknown> | undefined;
           const preferred = typeof group['preferred'] === 'string' ? group['preferred'] : null;
+          /*
+           * A feed in the proxy core's JSON brings its own layout, and then what a person chooses is what a
+           * client shows for it: the options of the group's own selector (the feed's `route.final`) — on
+           * the bench, two countries. Its urltest groups choose among the nodes, so the nodes are folded
+           * away below rather than offered as choices. The owner's words: "only what lies in the
+           * subscription is shown; the rest is under the hood".
+           */
+          const layout = group['layout'] as { selectors?: Group[] } | undefined;
+          const own = layout?.selectors?.find((selector) => selector['id'] === id);
+          const optionName = (ref: string): string =>
+            String(
+              layout?.selectors?.find((selector) => selector['id'] === ref)?.['name'] ??
+                members.find((member) => member['id'] === ref)?.['name'] ??
+                ref,
+            );
 
           return (
             <li key={id} className="tunnel-item">
@@ -95,16 +110,48 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
                 * moves the group within a round. "In use" stays the watchdog's reading, so a choice it
                 * had to leave because the member stopped answering shows as chosen but not in use.
                 */}
-              <SelectField
-                pointer={`/groups/${index}/preferred`}
-                label="Member to use"
-                value={preferred}
-                options={members.map((member) => ({ value: String(member['id']), title: String(member['name'] ?? member['id']) }))}
-                absent={{ title: 'The healthiest one (the device chooses)', write: undefined }}
-                help="A chosen member is kept while it answers at all; if it stops answering, the device uses another and comes back to it."
-              />
+              {own !== undefined ? (
+                <SelectField
+                  pointer={`/groups/${index}/preferred`}
+                  label="Connection to use"
+                  value={preferred}
+                  options={((own['options'] as string[] | undefined) ?? []).map((option) => ({ value: option, title: optionName(option) }))}
+                  absent={{ title: 'The feed’s default', write: undefined }}
+                  help="As the feed offers them. The feed itself picks the node inside each one; choosing one moves its UDP side as well."
+                />
+              ) : (
+                <SelectField
+                  pointer={`/groups/${index}/preferred`}
+                  label="Member to use"
+                  value={preferred}
+                  options={members.map((member) => ({ value: String(member['id']), title: String(member['name'] ?? member['id']) }))}
+                  absent={{ title: 'The healthiest one (the device chooses)', write: undefined }}
+                  help="A chosen member is kept while it answers at all; if it stops answering, the device uses another and comes back to it."
+                />
+              )}
 
-              <ul className="member-list">
+              {own !== undefined ? (
+                <Fold summary={`Nodes underneath (${String(members.length)})`}>
+                  <ul className="member-list">
+                    {members.map((member) => {
+                      const memberId = String(member['id']);
+                      const reading = readings.get(memberId);
+                      return (
+                        <li key={memberId}>
+                          {String(member['name'] ?? member['id'])}
+                          <span className={reading?.state === 'healthy' ? 'ok' : 'muted'}>
+                            {' · '}
+                            {reading === undefined ? 'not measured yet' : reading.state}
+                          </span>
+                          <TunnelTest subject={{ groupId: id, memberId }} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </Fold>
+              ) : null}
+
+              <ul className="member-list" hidden={own !== undefined}>
                 {members.map((member) => {
                   const memberId = String(member['id']);
                   const reading = readings.get(memberId);
@@ -149,6 +196,20 @@ export function Groups({ document }: { document: Record<string, unknown> }): Rea
                   label="Feed address"
                   value={group['url']}
                   help="Usually carries your account token inside it, so it is kept and shown the way a password is."
+                />
+                {/*
+                  * The question decides the answer: a panel picks what to send by the agent it is asked
+                  * as. Links are what this device has always read; the core's JSON brings the feed's own
+                  * selectors and rules (measured on the bench feed: 2 nodes as links, 12 and its routing
+                  * as JSON). Not detected, because both are valid answers from one feed.
+                  */}
+                <SelectField
+                  pointer={`/groups/${index}/format`}
+                  label="Feed format"
+                  value={typeof group['format'] === 'string' ? group['format'] : null}
+                  options={[{ value: 'sing-box', title: 'The proxy core’s JSON (sing-box), with the feed’s own routing' }]}
+                  absent={{ title: 'Links (vless://)', write: undefined }}
+                  help="Takes effect at the next refresh. A feed whose nodes are all xhttp has nothing to put in the core’s JSON; keep it on links."
                 />
                 <CheckField
                   pointer={`/groups/${index}/enabled`}

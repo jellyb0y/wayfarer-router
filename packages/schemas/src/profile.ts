@@ -1004,19 +1004,100 @@ export const ProfileMeta = Type.Object(
  * `id` is this product's: stable for as long as the feed keeps offering the node (matched by `node`),
  * because it is the node's outbound tag, its external client's unit name and its place in the port
  * order. A new node gets `<group>-<n>`, the first unused.
+ *
+ * One branch per catalogue entry a feed can deliver, joined by its `protocol` literal like a tunnel. VLESS
+ * arrives as a link or in the core's JSON; Hysteria 2 only in the core's JSON (2026-11-07).
  */
-export const GroupMember = Type.Object(
-  {
-    id: Source('generated', Identifier),
-    name: Source('subscription', Type.String({ minLength: 1, maxLength: 64 })),
-    /** The feed's identity for the node: `protocol://server:port?security=…&type=…`. A rename keeps it. */
-    node: Source('subscription', Type.String({ minLength: 1, maxLength: 256 })),
-    protocol: Source('subscription', Type.Literal('vless')),
-    config: FeedWritten(TUNNEL_CONFIGS.vless),
-  },
-  { additionalProperties: false, $id: 'GroupMember' },
+const memberCommon = {
+  id: Source('generated', Identifier),
+  name: Source('subscription', Type.String({ minLength: 1, maxLength: 64 })),
+  /**
+   * The feed's identity for the node. From a link: `protocol://server:port?security=…&type=…`, which a
+   * rename keeps. From the core's JSON: `tag:<the outbound's tag>`, because there the tag **is** the
+   * node — two outbounds with identical configurations are two QUIC connections, and merging them by
+   * endpoint would undo what the feed is built for (see `Hysteria2Config`).
+   */
+  node: Source('subscription', Type.String({ minLength: 1, maxLength: 256 })),
+};
+export const GroupMember = Type.Union(
+  [
+    Type.Object(
+      { ...memberCommon, protocol: Source('subscription', Type.Literal('vless')), config: FeedWritten(TUNNEL_CONFIGS.vless) },
+      { additionalProperties: false, $id: 'GroupMember_vless' },
+    ),
+    Type.Object(
+      { ...memberCommon, protocol: Source('subscription', Type.Literal('hysteria2')), config: FeedWritten(TUNNEL_CONFIGS.hysteria2) },
+      { additionalProperties: false, $id: 'GroupMember_hysteria2' },
+    ),
+  ],
+  { $id: 'GroupMember' },
 );
 export type GroupMember = Static<typeof GroupMember>;
+
+/**
+ * What an outbound reference in a feed's layout may name: a member, another selector of the layout, or
+ * `direct`. Stored as this product's ids, never as the feed's tags: a tag is arbitrary text (the feed of
+ * 2026-11-07 uses flags and spaces) and an outbound tag here has to be an identifier.
+ */
+const LayoutRef = Source('subscription', Type.String({ minLength: 1, maxLength: 63 }));
+
+/**
+ * A `selector` or `urltest` the feed defines, as the core would run it.
+ *
+ * The selector whose `id` equals the group's id is the one the feed's `route.final` names: the group's
+ * tag in the core, the thing the egress and every rule name, and the only one whose options a person sees.
+ */
+export const LayoutSelector = Type.Object(
+  {
+    id: Source('generated', Identifier),
+    /** The feed's tag, shown as the option's name. */
+    name: Source('subscription', Type.String({ minLength: 1, maxLength: 64 })),
+    kind: Source('subscription', Type.Union([Type.Literal('selector'), Type.Literal('urltest')])),
+    options: Source('subscription', Type.Array(Type.String({ minLength: 1, maxLength: 63 }), { minItems: 1, maxItems: 64 })),
+    /** A `selector`'s starting option, when the feed names one. */
+    default: Type.Optional(LayoutRef),
+    /** `urltest` only, as the feed wrote them, in the core's own spelling (`15s`, `1000`). */
+    url: Type.Optional(Source('subscription', Type.String({ maxLength: 512 }))),
+    interval: Type.Optional(Source('subscription', Type.String({ maxLength: 16 }))),
+    tolerance: Type.Optional(Source('subscription', Type.Integer({ minimum: 0, maximum: 60_000 }))),
+    idleTimeout: Type.Optional(Source('subscription', Type.String({ maxLength: 16 }))),
+    interruptExisting: Type.Optional(Source('subscription', Type.Boolean())),
+  },
+  { additionalProperties: false },
+);
+export type LayoutSelector = Static<typeof LayoutSelector>;
+
+/**
+ * One of the feed's routing rules, in the subset this product carries: by transport, by port, and
+ * "private destination". `to` is a `LayoutRef`; `reject` has none.
+ */
+export const LayoutRule = Type.Object(
+  {
+    network: Type.Optional(Source('subscription', Type.Union([Type.Literal('tcp'), Type.Literal('udp')]))),
+    port: Type.Optional(Source('subscription', Type.Array(Type.Integer({ minimum: 1, maximum: 65535 }), { minItems: 1, maxItems: 64 }))),
+    privateDestination: Type.Optional(Source('subscription', Type.Literal(true))),
+    action: Source('subscription', Type.Union([Type.Literal('route'), Type.Literal('reject')])),
+    to: Type.Optional(LayoutRef),
+  },
+  { additionalProperties: false },
+);
+export type LayoutRule = Static<typeof LayoutRule>;
+
+/**
+ * The structure a feed in the core's JSON gives its nodes: selectors, `urltest` groups and the rules that
+ * pick between them. Absent on a group fed by links, whose members the watchdog chooses among.
+ *
+ * Written by the refresh only, like the members. See docs/04-tunnels-and-protocols.md, "A feed in the
+ * proxy core's own format".
+ */
+export const GroupLayout = Type.Object(
+  {
+    selectors: Type.Array(LayoutSelector, { minItems: 1, maxItems: 64 }),
+    rules: Type.Array(LayoutRule, { maxItems: 64, default: [] }),
+  },
+  { additionalProperties: false },
+);
+export type GroupLayout = Static<typeof GroupLayout>;
 
 /**
  * A group of interchangeable tunnels, **and its members are what its subscription offers.**
@@ -1055,9 +1136,24 @@ export const Group = Type.Object(
     dns: Type.Optional(Copy(TunnelDns)),
     /** As on a tunnel: what its traffic does when **no** member is healthy. */
     onUnavailable: Source('person', Type.Union([Type.Literal('block'), Type.Literal('fall-through')], { default: 'block' })),
-    members: Type.Array(GroupMember, { maxItems: 64, default: [] }),
     /**
-     * The member a person chose, by id; absent means the watchdog chooses.
+     * What the feed is asked for, and so what it answers with. `links` (also when absent) sends this
+     * product's own `User-Agent` and reads `vless://` lines; `sing-box` presents itself as the core and
+     * reads the JSON configuration such a feed returns to it, layout and all.
+     *
+     * A person's choice rather than a detection, because the answer depends on the question: the
+     * `za-stenoy.ru` feed answers `wayfarer` with 2 VLESS links and `sing-box/…` with 16 nodes and its
+     * routing (measured 2026-11-07), while a feed whose nodes are all xhttp — which only the external
+     * client runs — has nothing to put in the core's JSON for them.
+     */
+    format: Type.Optional(Source('person', Type.Union([Type.Literal('links'), Type.Literal('sing-box')], { default: 'links' }))),
+    members: Type.Array(GroupMember, { maxItems: 64, default: [] }),
+    /** Present only for a `sing-box` feed. See `GroupLayout`. */
+    layout: Type.Optional(GroupLayout),
+    /**
+     * The member a person chose, by id; absent means the watchdog chooses. **For a group with a
+     * `layout`** it is one of the options of the group's own selector (the one `route.final` names in
+     * the feed), and absent means the core starts on the feed's default.
      *
      * Not the same as sticky. Sticky keeps whatever the group is on while it is healthy, and once it has
      * moved it stays where it moved; a member that fails on jitter alone counts as failed. A chosen member

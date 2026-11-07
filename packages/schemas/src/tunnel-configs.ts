@@ -356,8 +356,8 @@ export const Hysteria2PortRange = Type.String({ pattern: '^[0-9]{1,5}(:[0-9]{1,5
 /**
  * **Hysteria 2**, the QUIC-based protocol the proxy core runs natively.
  *
- * Added on 2026-11-07 for one feed: of the 16 nodes the `za-stenoy.ru` subscription offers in the core's
- * JSON, 12 are Hysteria 2, and its routing sends all UDP through them. Its link form was already
+ * Added on 2026-11-07 for one feed: of the 12 nodes the `za-stenoy.ru` subscription offers in the core's
+ * JSON, 8 are Hysteria 2, and its routing sends all UDP through them. Its link form was already
  * recognised and refused (`hysteria2://`), because nothing in the catalogue could store one.
  *
  * Marked `person` as a whole, for the reason `VlessConfig` gives, with **one exception, `insecure`.**
@@ -384,7 +384,7 @@ export const Hysteria2Config = Source('person', Type.Object(
      * The owner's ruling, 2026-11-07: *if the subscription's configuration explicitly requires it, follow
      * the subscription.* The feed that prompted it sets `tls.insecure: true` on every Hysteria 2 node;
      * its operator says the certificate on those servers is self-signed and that the panel has no way to
-     * hand a sing-box client a pin. Refusing it would drop 12 of 16 nodes and the whole UDP path.
+     * hand a sing-box client a pin. Refusing it would drop 8 of 12 nodes and the whole UDP path.
      *
      * On a person's own tunnel it is refused (`insecure_outside_feed`, `core/invariants.ts`): the
      * product still has no switch a person flips to stop checking a server, and that decision is

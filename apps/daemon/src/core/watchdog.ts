@@ -45,8 +45,21 @@ import type { Liveness, LivenessBasis, LivenessMethod, LivenessSubject } from '.
 
 /** A group's selector and its members, and the egress — see `WatchdogDeps.selections`. */
 export interface WatchdogSelections {
-  /** `preferred`: the member a person chose (`Group.preferred` in the profile), or `null` for none. */
-  groups: { id: string; members: string[]; preferred?: string | null }[];
+  /**
+   * `preferred`: the member a person chose (`Group.preferred` in the profile), or `null` for none.
+   *
+   * `layout`: present for a group fed by the core's JSON, whose own `urltest` groups choose inside it.
+   * The watchdog then chooses nothing among its members; it measures them for the egress decision, holds
+   * each selector of the layout where the person's choice puts it (`layoutChoices`), and moves the feed's
+   * other selectors to the fallback while the main selector is on it. `others` are those other selectors,
+   * each with the option it returns to when nothing is chosen for it.
+   */
+  groups: {
+    id: string;
+    members: string[];
+    preferred?: string | null;
+    layout?: { choices: { selector: string; option: string }[]; others: { selector: string; first: string }[] };
+  }[];
   egress: { kind: 'group' | 'tunnel'; id: string } | null;
 }
 
@@ -194,8 +207,8 @@ export function guardedTunnels(
   const tunnels = new Map(document.tunnels.map((tunnel) => [tunnel.id, tunnel]));
   return resourceCarriers(document).map((carrier) => {
     /*
-     * A group is asked the way its members are — they are all VLESS today, whose liveness is read
-     * through the outbound — and through **its own selector**, so the reading is of whichever member it
+     * A group is asked the way its members are — VLESS or Hysteria 2, both session-less, whose liveness
+     * is read through the outbound the same way — and through **its own selector**, so the reading is of whichever member it
      * is on. Choosing that member is the group round's business; the guard asks only whether the group,
      * as it stands, carries traffic.
      */
@@ -717,7 +730,9 @@ export function createWatchdog(deps: WatchdogDeps): {
     const before = new Map((await deps.core.proxies()).map((entry) => [entry.name, entry]));
     const sets = groups
       .map((group) => {
-        const listed = new Set(before.get(group.id)?.all ?? []);
+        // A layout group's own selector offers its feed's urltest groups, not members; its members are
+        // whatever the core runs as outbounds.
+        const listed = group.layout === undefined ? new Set(before.get(group.id)?.all ?? []) : new Set(before.keys());
         return { group, members: group.members.filter((id) => listed.has(id)) };
       })
       .filter((set) => before.has(set.group.id));
@@ -833,9 +848,71 @@ export function createWatchdog(deps: WatchdogDeps): {
      * selector or the group's guard decides what that means for its traffic.
      */
     const groupOutcomes: GroupOutcome[] = [];
+    /*
+     * A group fed by the core's JSON: its urltest groups choose among members, so nothing here does. What
+     * is held is the person's choice — each selector of the layout on the option it implies — and, while
+     * the main selector stands on the fallback, the feed's other selectors on it too: the feed's rules send
+     * UDP to those directly, past the main selector, and it must fall back with everything else. Read
+     * against the selectors as they stood at the start of the round, so a fallback decided this round is
+     * followed on the next.
+     */
+    const fallbackTag = policy.onAllDown === 'direct' ? CORE_TAGS.direct : CORE_TAGS.block;
+    const mainOnFallback = before.get(deps.selector)?.now === fallbackTag;
+    const holdLayout = async (
+      groupId: string,
+      layout: NonNullable<WatchdogSelections['groups'][number]['layout']>,
+      current: string | null,
+      members: TunnelHealth[],
+    ): Promise<GroupOutcome> => {
+      const wanted = new Map(layout.choices.map((choice) => [choice.selector, choice.option]));
+      for (const other of layout.others) {
+        if (mainOnFallback) wanted.set(other.selector, fallbackTag);
+        else if (!wanted.has(other.selector) && before.get(other.selector)?.now === fallbackTag) wanted.set(other.selector, other.first);
+      }
+      let moved = false;
+      for (const [selector, option] of wanted) {
+        const now = before.get(selector)?.now ?? null;
+        if (now === null || now === option) continue;
+        const switched = await deps.core.select(selector, option);
+        if (!switched.ok) {
+          deps.record({
+            level: 'error',
+            kind: 'health.switch-failed',
+            summary: `could not point ${selector} of group ${groupId} at ${option}: ${switched.message}`,
+            detail: { group: groupId, selector, from: now, to: option },
+          });
+          continue;
+        }
+        moved = true;
+        deps.record({
+          level: 'info',
+          kind: 'health.switched',
+          summary: `group ${groupId}: ${selector} moved from ${now} to ${option}`,
+          detail: { group: groupId, selector, from: now, to: option, reason: option === fallbackTag ? 'the main selector is on the fallback' : 'the chosen option' },
+        });
+        // A choice is a command: connections still on another option move with it (see `closeThrough`).
+        if (selector === groupId && option !== fallbackTag && deps.core.closeThrough !== undefined) {
+          const closed = await deps.core.closeThrough(groupId, option);
+          if (closed !== null && closed > 0) {
+            deps.record({
+              level: 'info',
+              kind: 'health.connections-moved',
+              summary: `closed ${String(closed)} connection(s) of group ${groupId} still on another option, so they reopen through ${option}`,
+              detail: { group: groupId, to: option, closed },
+            });
+          }
+        }
+      }
+      const selected = wanted.get(groupId) ?? current;
+      return { id: groupId, selected, changed: moved, reason: 'the feed’s own urltest groups choose inside this group', members };
+    };
     for (const [index, set] of sets.entries()) {
       const members = measured[index] ?? [];
       const current = before.get(set.group.id)?.now ?? null;
+      if (set.group.layout !== undefined) {
+        groupOutcomes.push(await holdLayout(set.group.id, set.group.layout, current, members));
+        continue;
+      }
       if (members.length === 0) {
         groupOutcomes.push({ id: set.group.id, selected: current, changed: false, reason: 'no member was measured', members });
         continue;

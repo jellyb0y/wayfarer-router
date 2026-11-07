@@ -16,7 +16,7 @@ function node(server: string, label: string, id = 'u'): ParsedNode {
   return { scheme: 'vless', label, protocol: 'vless', config: { server, port: 443, id, network: 'tcp', security: 'tls' } };
 }
 
-const member = (id: string, server: string, account = 'u'): Group['members'][number] => ({
+const member = (id: string, server: string, account = 'u'): Extract<Group['members'][number], { protocol: 'vless' }> => ({
   id,
   name: id,
   node: `vless://${server}:443?security=tls&type=tcp`,
@@ -132,7 +132,7 @@ test('a chosen member the feed drops takes the choice with it; one it keeps keep
 
 test('a member stored before the path joined the identity keeps its id', () => {
   const config = { server: 'front.example', port: 443, id: 'u', network: 'xhttp' as const, security: 'tls' as const, path: '/x/pl' };
-  const stored: Group['members'][number] = { ...member('pl', 'front.example'), node: 'vless://front.example:443?security=tls&type=xhttp', config };
+  const stored: Extract<Group['members'][number], { protocol: 'vless' }> = { ...member('pl', 'front.example'), node: 'vless://front.example:443?security=tls&type=xhttp', config };
   const outcome = refreshGroup({ document: documentWith([stored]), groupId: 'feed', nodes: [{ scheme: 'vless', label: 'PL', protocol: 'vless', config } as ParsedNode] });
   assert.deepEqual(outcome.document.groups[0]!.members.map((entry) => [entry.id, entry.node]), [['pl', 'vless://front.example:443?security=tls&type=xhttp&path=%2Fx%2Fpl']]);
   assert.deepEqual(outcome.added, []);

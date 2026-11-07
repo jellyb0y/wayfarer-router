@@ -241,7 +241,7 @@ test('the members become what the feed offers: a withdrawn node leaves, a new on
     const members = b.document().groups[0]!.members;
     assert.deepEqual(members.map((entry) => entry.id), ['de', 'feed-1']);
     assert.equal(members[1]!.config.server, '82.21.117.116');
-    assert.equal(secretOf(members[1]!.config.id), 'u-3');
+    assert.equal(secretOf((members[1]!.config as { id: unknown }).id), 'u-3');
     assert.equal(members[1]!.name, 'Germany 2');
     // The egress names the group; nothing outside it moved.
     assert.equal(b.document().policy.egress, 'feed');
@@ -260,7 +260,7 @@ test('a changed credential replaces the member configuration, and its name follo
     await b.run();
     const after = b.document().groups[0]!.members[0]!;
     assert.equal(after.id, 'de', 'the id is the outbound tag and stays');
-    assert.equal(secretOf(after.config.id), 'u-new');
+    assert.equal(secretOf((after.config as { id: unknown }).id), 'u-new');
     assert.equal(after.name, 'DE renamed');
     assert.equal(b.applied.length, 1);
   } finally {
@@ -273,7 +273,7 @@ test('a change that needs a confirmation window is not stored and not applied', 
   const b = bench({ profile, answer: { ok: true, text: feed(link('5.39.255.51', 'u-new', 'DE')) }, blastRadius: 'network' });
   try {
     await b.run();
-    assert.equal(secretOf(b.document().groups[0]!.members[0]!.config.id), 'u-1');
+    assert.equal(secretOf((b.document().groups[0]!.members[0]!.config as { id: unknown }).id), 'u-1');
     assert.equal(b.applied.length, 0);
     assert.ok(b.events.some((event) => event.kind === 'subscription.refresh-held'));
   } finally {
@@ -290,7 +290,7 @@ test("a refresh does not ride on a person's edit that is not applied yet", async
   try {
     await b.run();
     assert.equal(b.applied.length, 0);
-    assert.equal(secretOf(b.document().groups[0]!.members[0]!.config.id), 'u-1');
+    assert.equal(secretOf((b.document().groups[0]!.members[0]!.config as { id: unknown }).id), 'u-1');
     assert.match(b.document().groups[0]!.lastRefresh!.detail, /not applied/);
     // Held is not done: retried in an hour, not in a day.
     assert.equal(b.document().groups[0]!.lastRefresh!.ok, false);
@@ -304,7 +304,7 @@ test('a refresh whose apply fails puts the previous profile back', async () => {
   try {
     await b.run();
     assert.equal(b.applied.length, 1);
-    assert.equal(secretOf(b.document().groups[0]!.members[0]!.config.id), 'u-1');
+    assert.equal(secretOf((b.document().groups[0]!.members[0]!.config as { id: unknown }).id), 'u-1');
     assert.ok(b.events.some((event) => event.kind === 'subscription.refresh-failed'));
   } finally {
     b.close();

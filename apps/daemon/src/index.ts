@@ -42,7 +42,7 @@ import {
 import { createWindowWatch } from './core/window-watch.ts';
 import { createDriftMonitor, DRIFT_INTERVAL_MS } from './core/drift.ts';
 import { ruleSetAgesFor } from './core/rule-set-age.ts';
-import { egressOf, emptyProfile, type ProfileDocument as ProfileDocumentType } from '@wayfarer/schemas';
+import { egressOf, emptyProfile, layoutChoices, type ProfileDocument as ProfileDocumentType } from '@wayfarer/schemas';
 import { createWatchdog, deviceGuards, observeWatchdog } from './core/watchdog.ts';
 import { createLivenessMeter, KEEPALIVE_STATUS_SECONDS } from './core/liveness.ts';
 import { openVpnUnit } from './core/catalogue/openvpn.ts';
@@ -746,7 +746,11 @@ async function main(): Promise<void> {
     profiles,
     applyDeps,
     observers,
-    fetchText: async (url) => await platform.http.fetchText(url),
+    fetchText: async (url, options) => await platform.http.fetchText(url, options ?? {}),
+    coreAgent: async () => {
+      const core = await platform.binaries.detect('sing-box').catch(() => null);
+      return core?.version === null || core?.version === undefined ? 'sing-box' : `sing-box/${core.version}`;
+    },
     clockSynchronized: async () => (await platform.clock.status()).synchronized,
     record: (event) => store.recordEvent(event),
   });
@@ -951,7 +955,21 @@ async function main(): Promise<void> {
       return {
         groups: document.groups
           .filter((group) => group.enabled)
-          .map((group) => ({ id: group.id, members: group.members.map((member) => member.id), preferred: group.preferred ?? null })),
+          .map((group) => ({
+            id: group.id,
+            members: group.members.map((member) => member.id),
+            preferred: group.preferred ?? null,
+            ...(group.layout === undefined
+              ? {}
+              : {
+                  layout: {
+                    choices: layoutChoices(group).selections,
+                    others: group.layout.selectors
+                      .filter((selector) => selector.id !== group.id && selector.kind === 'selector')
+                      .map((selector) => ({ selector: selector.id, first: selector.default ?? selector.options[0]! })),
+                  },
+                }),
+          })),
         egress: egress === null ? null : { kind: egress.kind, id: egress.id },
       };
     },

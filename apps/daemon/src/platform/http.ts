@@ -40,7 +40,7 @@ export const FETCH_TEXT_TIMEOUT_MS = 20_000;
 
 export async function fetchText(
   url: string,
-  options: { timeoutMs?: number; maxBytes?: number; linksDirectory?: string } = {},
+  options: { timeoutMs?: number; maxBytes?: number; linksDirectory?: string; userAgent?: string } = {},
 ): Promise<FetchTextResult> {
   const maxBytes = options.maxBytes ?? FETCH_TEXT_MAX_BYTES;
   const controller = new AbortController();
@@ -49,7 +49,7 @@ export async function fetchText(
     const lookup = uplinkLookup(await uplinkResolvers(options.linksDirectory ?? NETWORKD_LINKS));
     let target = new URL(url);
     for (let hop = 0; ; hop += 1) {
-      const response = await get(target, lookup, controller.signal);
+      const response = await get(target, lookup, controller.signal, options.userAgent ?? 'wayfarer');
       const status = response.statusCode ?? 0;
       const location = response.headers.location;
       if (status >= 300 && status < 400 && location !== undefined) {
@@ -88,14 +88,15 @@ export async function fetchText(
 
 type Lookup = LookupFunction;
 
-function get(url: URL, lookup: Lookup | undefined, signal: AbortSignal): Promise<IncomingMessage> {
+function get(url: URL, lookup: Lookup | undefined, signal: AbortSignal, userAgent: string): Promise<IncomingMessage> {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return Promise.reject(new Error('unsupported scheme'));
   const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
   return new Promise((resolve, reject) => {
     // A subscription client is expected to identify itself; some panels answer an anonymous request
     // with a web page instead of the feed. Assumption, not measured on the feeds in use here: both
-    // answered `curl`'s default agent with the feed.
-    const request = send(url, { signal, headers: { 'user-agent': 'wayfarer' }, ...(lookup === undefined ? {} : { lookup }) }, resolve);
+    // answered `curl`'s default agent with the feed. The agent is also the question: a panel decides
+    // by it what to answer with (see `Group.format`), so a caller may name one.
+    const request = send(url, { signal, headers: { 'user-agent': userAgent }, ...(lookup === undefined ? {} : { lookup }) }, resolve);
     request.on('error', reject);
     request.end();
   });

@@ -119,6 +119,7 @@ export function checkInvariants(input: InvariantInput): Finding[] {
     ...checkWirelessCredentials(input),
     ...checkTunnelReality(input),
     ...checkInsecureOutsideFeed(input),
+    ...checkGroupLayouts(input),
     ...checkProbeEndpoints(input),
     ...checkResourceTunnelReach(input),
     ...checkTunnelResourceOrder(input),
@@ -501,6 +502,66 @@ const SSID_MAX_BYTES = 32;
  * validates — and a validating document is not the same as one somebody meant. Members of a group are
  * not in `/tunnels` in the stored document this reads, so the feed's own nodes never reach this check.
  */
+/**
+ * A group's layout must be one the core can run: its own selector present, and every reference naming a
+ * member, a selector of the same layout, or `direct`.
+ *
+ * The refresh writes layouts only from what it resolved, so this guards the other writers — an import, an
+ * edit through the API — where a dangling tag is a core that refuses to start, taking every tunnel with it.
+ *
+ * And one warning: a layout's rules are emitted only when its group is the egress (`layoutRules` in
+ * `generate/core-config.ts`). A group with rules used some other way carries its traffic without them,
+ * and that is said rather than left to be discovered.
+ */
+function checkGroupLayouts({ profile }: InvariantInput): Finding[] {
+  const findings: Finding[] = [];
+  (profile.groups ?? []).forEach((group, g) => {
+    const layout = group.layout;
+    if (layout === undefined || !group.enabled) return;
+    const base = `/groups/${g}/layout`;
+    if (!layout.selectors.some((selector) => selector.id === group.id)) {
+      findings.push({
+        severity: 'error',
+        code: 'group_layout_without_group_selector',
+        message: `Group "${group.name}" has a feed layout with no selector of its own id, so nothing in it is what the group's traffic enters.`,
+        pointer: `${base}/selectors`,
+        hint: 'Refresh the group from its subscription, which writes the layout whole.',
+      });
+    }
+    const known = new Set<string>(['direct', ...group.members.map((member) => member.id), ...layout.selectors.map((selector) => selector.id)]);
+    const dangling = (pointer: string, ref: string): void => {
+      findings.push({
+        severity: 'error',
+        code: 'group_layout_dangling_reference',
+        message: `Group "${group.name}" refers to "${ref}" in its feed layout, and nothing in the group is called that.`,
+        pointer,
+        hint: 'Refresh the group from its subscription, which writes the layout whole.',
+      });
+    };
+    layout.selectors.forEach((selector, k) => {
+      selector.options.forEach((option, o) => {
+        if (!known.has(option)) dangling(`${base}/selectors/${k}/options/${o}`, option);
+      });
+      if (selector.default !== undefined && !selector.options.includes(selector.default)) dangling(`${base}/selectors/${k}/default`, selector.default);
+    });
+    layout.rules.forEach((rule, r) => {
+      if (rule.to !== undefined && !known.has(rule.to)) dangling(`${base}/rules/${r}/to`, rule.to);
+    });
+    if (layout.rules.length > 0 && profile.policy.egress !== group.id) {
+      findings.push({
+        severity: 'warning',
+        code: 'group_feed_rules_unused',
+        message:
+          `Group "${group.name}" comes with ${String(layout.rules.length)} routing rule(s) from its feed, and they apply only ` +
+          'while the group is the egress. Used any other way, its traffic is carried without them.',
+        pointer: `${base}/rules`,
+        hint: 'Make the group the egress for its feed\'s rules to apply.',
+      });
+    }
+  });
+  return findings;
+}
+
 function checkInsecureOutsideFeed({ profile }: InvariantInput): Finding[] {
   const findings: Finding[] = [];
   profile.tunnels.forEach((tunnel, index) => {
@@ -1091,6 +1152,12 @@ function checkCrossReferences({ profile }: InvariantInput): Finding[] {
     ...(profile.groups ?? []).map((group, index) => ({ id: group.id, pointer: `/groups/${index}/id`, what: 'group' })),
     ...(profile.groups ?? []).flatMap((group, g) =>
       group.members.map((member, m) => ({ id: member.id, pointer: `/groups/${g}/members/${m}/id`, what: 'group member' })),
+    ),
+    // A layout's selectors are outbound tags too — except the one that *is* the group, already listed.
+    ...(profile.groups ?? []).flatMap((group, g) =>
+      (group.layout?.selectors ?? []).flatMap((selector, k) =>
+        selector.id === group.id ? [] : [{ id: selector.id, pointer: `/groups/${g}/layout/selectors/${k}/id`, what: 'group member' }],
+      ),
     ),
   ];
   const seen = new Set<string>();

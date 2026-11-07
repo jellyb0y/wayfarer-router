@@ -54,3 +54,15 @@ export {
   type SubscriptionParser,
   type SubscriptionResult,
 } from './subscriptions.ts';
+
+/* ── subscriptions in the proxy core's own JSON ──────────────────────────────────────────── */
+
+export {
+  DIRECT,
+  looksLikeSingBoxFeed,
+  parseSingBoxFeed,
+  type FeedFailure,
+  type FeedRule,
+  type FeedSelector,
+  type SingBoxFeed,
+} from './sing-box-feed.ts';

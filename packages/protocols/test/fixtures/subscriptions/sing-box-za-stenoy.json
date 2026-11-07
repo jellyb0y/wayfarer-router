@@ -1,0 +1,422 @@
+{
+ "dns": {
+  "final": "local",
+  "rules": [
+   {
+    "server": "remote",
+    "query_type": [
+     "A",
+     "AAAA"
+    ]
+   }
+  ],
+  "servers": [
+   {
+    "tag": "local",
+    "type": "udp",
+    "server": "1.1.1.1"
+   },
+   {
+    "tag": "remote",
+    "type": "fakeip",
+    "inet4_range": "198.18.0.0/15"
+   }
+  ]
+ },
+ "log": {
+  "level": "warn",
+  "timestamp": true
+ },
+ "route": {
+  "final": "🚀 VPN",
+  "rules": [
+   {
+    "action": "sniff"
+   },
+   {
+    "action": "hijack-dns",
+    "protocol": "dns"
+   },
+   {
+    "outbound": "direct",
+    "ip_is_private": true
+   },
+   {
+    "port": 443,
+    "action": "reject",
+    "network": "udp"
+   },
+   {
+    "network": "udp",
+    "outbound": "🎮 Rapid UDP"
+   }
+  ],
+  "auto_detect_interface": true,
+  "default_domain_resolver": "local"
+ },
+ "inbounds": [
+  {
+   "mtu": 9000,
+   "tag": "tun-in",
+   "type": "tun",
+   "stack": "mixed",
+   "address": [
+    "172.19.0.1/30"
+   ],
+   "auto_route": true,
+   "strict_route": true
+  },
+  {
+   "tag": "mixed-in",
+   "type": "mixed",
+   "listen": "127.0.0.1",
+   "listen_port": 2412
+  }
+ ],
+ "outbounds": [
+  {
+   "tag": "🚀 VPN",
+   "type": "selector",
+   "outbounds": [
+    "🇵🇱 Польша · Rapid Авто",
+    "🇩🇪 Германия · Rapid Авто"
+   ],
+   "interrupt_exist_connections": true
+  },
+  {
+   "tag": "🎮 Rapid UDP",
+   "type": "selector",
+   "outbounds": [
+    "🇵🇱 Польша · Rapid UDP",
+    "🇩🇪 Германия · Rapid UDP"
+   ],
+   "interrupt_exist_connections": false
+  },
+  {
+   "tag": "🇵🇱 Польша · Rapid UDP",
+   "url": "https://www.gstatic.com/generate_204",
+   "type": "urltest",
+   "interval": "15s",
+   "outbounds": [
+    "🇵🇱 Польша · R2 · HY-UDP",
+    "🇵🇱 Польша · R1 · HY-UDP",
+    "🇵🇱 Польша · R2 · VISION",
+    "🇵🇱 Польша · R1 · VISION"
+   ],
+   "tolerance": 1000,
+   "interrupt_exist_connections": false
+  },
+  {
+   "tag": "🇩🇪 Германия · Rapid UDP",
+   "url": "https://www.gstatic.com/generate_204",
+   "type": "urltest",
+   "interval": "15s",
+   "outbounds": [
+    "🇩🇪 Германия · R2 · HY-UDP",
+    "🇩🇪 Германия · R1 · HY-UDP",
+    "🇩🇪 Германия · R2 · VISION",
+    "🇩🇪 Германия · R1 · VISION"
+   ],
+   "tolerance": 1000,
+   "interrupt_exist_connections": false
+  },
+  {
+   "tag": "🇵🇱 Польша · Rapid Авто",
+   "url": "https://www.gstatic.com/generate_204",
+   "type": "urltest",
+   "interval": "60s",
+   "outbounds": [
+    "🇵🇱 Польша · R1 · VISION",
+    "🇵🇱 Польша · R2 · VISION",
+    "🇵🇱 Польша · R1 · HY",
+    "🇵🇱 Польша · R2 · HY"
+   ],
+   "tolerance": 300,
+   "interrupt_exist_connections": false
+  },
+  {
+   "tag": "🇩🇪 Германия · Rapid Авто",
+   "url": "https://www.gstatic.com/generate_204",
+   "type": "urltest",
+   "interval": "60s",
+   "outbounds": [
+    "🇩🇪 Германия · R1 · VISION",
+    "🇩🇪 Германия · R2 · VISION",
+    "🇩🇪 Германия · R1 · HY",
+    "🇩🇪 Германия · R2 · HY"
+   ],
+   "tolerance": 300,
+   "interrupt_exist_connections": false
+  },
+  {
+   "tag": "direct",
+   "type": "direct"
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇵🇱 Польша · R1 · HY-UDP",
+   "server": "95.174.94.144",
+   "server_port": 8844,
+   "password": "invented-password-1",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "18020:18039"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-2"
+   }
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇵🇱 Польша · R2 · HY-UDP",
+   "server": "213.171.25.107",
+   "server_port": 8844,
+   "password": "invented-password-3",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "18020:18039"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-4"
+   }
+  },
+  {
+   "type": "vless",
+   "tag": "🇵🇱 Польша · R1 · VISION",
+   "server": "95.174.94.144",
+   "server_port": 443,
+   "uuid": "00000000-0000-4000-8000-000000000005",
+   "flow": "xtls-rprx-vision",
+   "tls": {
+    "enabled": true,
+    "reality": {
+     "enabled": true,
+     "public_key": "INVENTEDpublicKeyAAAAAAAAAAAAAAAAAAAAAAAAA06",
+     "short_id": "00000007"
+    },
+    "server_name": "hh.ru",
+    "utls": {
+     "enabled": true,
+     "fingerprint": "chrome"
+    }
+   }
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇵🇱 Польша · R1 · HY",
+   "server": "95.174.94.144",
+   "server_port": 8844,
+   "password": "invented-password-8",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "18020:18039"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-9"
+   }
+  },
+  {
+   "type": "vless",
+   "tag": "🇵🇱 Польша · R2 · VISION",
+   "server": "213.171.25.107",
+   "server_port": 443,
+   "uuid": "00000000-0000-4000-8000-000000000010",
+   "flow": "xtls-rprx-vision",
+   "tls": {
+    "enabled": true,
+    "reality": {
+     "enabled": true,
+     "public_key": "INVENTEDpublicKeyAAAAAAAAAAAAAAAAAAAAAAAAA11",
+     "short_id": "0000000c"
+    },
+    "server_name": "hh.ru",
+    "utls": {
+     "enabled": true,
+     "fingerprint": "chrome"
+    }
+   }
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇵🇱 Польша · R2 · HY",
+   "server": "213.171.25.107",
+   "server_port": 8844,
+   "password": "invented-password-13",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "18020:18039"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-14"
+   }
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇩🇪 Германия · R1 · HY-UDP",
+   "server": "95.174.94.144",
+   "server_port": 8525,
+   "password": "invented-password-15",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "11640:11659"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-16"
+   }
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇩🇪 Германия · R2 · HY-UDP",
+   "server": "213.171.25.107",
+   "server_port": 8525,
+   "password": "invented-password-17",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "11640:11659"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-18"
+   }
+  },
+  {
+   "type": "vless",
+   "tag": "🇩🇪 Германия · R1 · VISION",
+   "server": "95.174.94.144",
+   "server_port": 443,
+   "uuid": "00000000-0000-4000-8000-000000000019",
+   "flow": "xtls-rprx-vision",
+   "tls": {
+    "enabled": true,
+    "reality": {
+     "enabled": true,
+     "public_key": "INVENTEDpublicKeyAAAAAAAAAAAAAAAAAAAAAAAAA20",
+     "short_id": "00000015"
+    },
+    "server_name": "ozon.ru",
+    "utls": {
+     "enabled": true,
+     "fingerprint": "chrome"
+    }
+   }
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇩🇪 Германия · R1 · HY",
+   "server": "95.174.94.144",
+   "server_port": 8525,
+   "password": "invented-password-22",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "11640:11659"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-23"
+   }
+  },
+  {
+   "type": "vless",
+   "tag": "🇩🇪 Германия · R2 · VISION",
+   "server": "213.171.25.107",
+   "server_port": 443,
+   "uuid": "00000000-0000-4000-8000-000000000024",
+   "flow": "xtls-rprx-vision",
+   "tls": {
+    "enabled": true,
+    "reality": {
+     "enabled": true,
+     "public_key": "INVENTEDpublicKeyAAAAAAAAAAAAAAAAAAAAAAAAA25",
+     "short_id": "0000001a"
+    },
+    "server_name": "ozon.ru",
+    "utls": {
+     "enabled": true,
+     "fingerprint": "chrome"
+    }
+   }
+  },
+  {
+   "type": "hysteria2",
+   "tag": "🇩🇪 Германия · R2 · HY",
+   "server": "213.171.25.107",
+   "server_port": 8525,
+   "password": "invented-password-27",
+   "tls": {
+    "enabled": true,
+    "server_name": "za-stenoy.ru",
+    "insecure": true,
+    "alpn": [
+     "h3"
+    ]
+   },
+   "server_ports": [
+    "11640:11659"
+   ],
+   "obfs": {
+    "type": "salamander",
+    "password": "invented-password-28"
+   }
+  }
+ ],
+ "experimental": {
+  "cache_file": {
+   "enabled": true,
+   "store_fakeip": true
+  }
+ }
+}

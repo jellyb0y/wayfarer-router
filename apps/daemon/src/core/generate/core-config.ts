@@ -170,8 +170,13 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
    * The watchdog chooses the member. The first planned member is only the default a core starts on
    * before any reading exists. Sticky keeps live connections where they are when the watchdog moves it.
    */
+  const fallbackTag = profile.policy.onAllDown === 'direct' ? CORE_TAGS.direct : CORE_TAGS.block;
   for (const group of profile.groups ?? []) {
     if (!group.enabled) continue;
+    if (group.layout !== undefined) {
+      outbounds.push(...layoutOutbounds(group, input.emitted, fallbackTag, !profile.policy.sticky));
+      continue;
+    }
     const planned = group.members.map((member) => member.id).filter((id) => input.emitted.has(id));
     outbounds.push({
       type: 'selector',
@@ -198,7 +203,6 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
    *                       400 {"message":"Selector update error: not found"}
    * ```
    */
-  const fallbackTag = profile.policy.onAllDown === 'direct' ? CORE_TAGS.direct : CORE_TAGS.block;
   const egress = egressOf(profile);
   const egressTag =
     egress === null ? null : egress.kind === 'group' ? egress.id : input.emitted.has(egress.id) ? egress.id : null;
@@ -521,6 +525,9 @@ export function generateCoreConfigWithProvenance(input: CoreConfigInput): CoreCo
            */
           .map((entry) => entry.rule)
           .filter((rule): rule is Record<string, unknown> => rule !== null),
+        // Last, after every rule of this device's own: the feed's rules decide only among what would
+        // otherwise reach `route.final`, which is the egress. See `layoutRules`.
+        ...layoutRules(egress?.kind === 'group' ? egress.group : null),
       ],
       ...(profile.routing.ruleSets.length > 0
         ? {
@@ -642,3 +649,79 @@ function directDnsServer(profile: ProfileDocument): Record<string, unknown>[] {
 }
 
 
+
+/* ── a feed's layout ─────────────────────────────────────────────────────────────────────── */
+
+/** A layout reference as an outbound tag: a member or selector id is its own tag, `direct` is ours. */
+function layoutTag(ref: string): string {
+  return ref === 'direct' ? CORE_TAGS.direct : ref;
+}
+
+/**
+ * The feed's selectors and `urltest` groups, as the core would run them from the feed's own file.
+ *
+ * The one that is the group (`id === group.id`) is what the egress, rules and guards name. A member the
+ * planner refused is not an outbound, so it is not an option either — the same rule as a plain group.
+ *
+ * **One addition, for the fallback**: every other `selector` also offers the fallback (`block` or
+ * `direct`, per `onAllDown`). The feed's rules send traffic to those selectors directly — the UDP one —
+ * past the main selector, so when the watchdog moves the main selector to the fallback it has to be able
+ * to move these too, or UDP would go on trying a dead feed while everything else had fallen back.
+ */
+export function layoutOutbounds(
+  group: ProfileDocument['groups'][number],
+  emitted: CoreConfigInput['emitted'],
+  fallbackTag: string,
+  interruptDefault: boolean,
+): Record<string, unknown>[] {
+  const layout = group.layout!;
+  const memberIds = new Set(group.members.map((member) => member.id));
+  const usable = (ref: string): boolean => !memberIds.has(ref) || emitted.has(ref);
+  return layout.selectors.map((selector) => {
+    const options = selector.options.filter(usable).map(layoutTag);
+    const isGroup = selector.id === group.id;
+    if (selector.kind === 'urltest') {
+      return {
+        type: 'urltest',
+        tag: selector.id,
+        // An urltest with nothing to test is refused by the core; `block` keeps the file valid and the
+        // planner's warning says why the group cannot carry anything.
+        outbounds: options.length > 0 ? options : [CORE_TAGS.block],
+        ...(selector.url === undefined ? {} : { url: selector.url }),
+        ...(selector.interval === undefined ? {} : { interval: selector.interval }),
+        ...(selector.tolerance === undefined ? {} : { tolerance: selector.tolerance }),
+        ...(selector.idleTimeout === undefined ? {} : { idle_timeout: selector.idleTimeout }),
+        interrupt_exist_connections: selector.interruptExisting ?? interruptDefault,
+      };
+    }
+    const offered = isGroup ? options : [...options, fallbackTag];
+    const fallback = selector.default === undefined ? undefined : layoutTag(selector.default);
+    return {
+      type: 'selector',
+      tag: selector.id,
+      outbounds: offered.length > 0 ? offered : [CORE_TAGS.block],
+      ...(fallback !== undefined && offered.includes(fallback) ? { default: fallback } : {}),
+      interrupt_exist_connections: selector.interruptExisting ?? interruptDefault,
+    };
+  });
+}
+
+/**
+ * The feed's routing rules, for the group that is the egress, and only for it.
+ *
+ * Placed after every rule this device writes, so they see exactly the traffic that would otherwise reach
+ * `route.final` — the egress — and nothing a person's rule, a resource tunnel or a protected network
+ * already claimed. That is the owner's "only inside the traffic already given to the group" (2026-11-07).
+ * A group used for resources or named by a rule does not get its feed's rules: a rule cannot be scoped to
+ * "what another rule matched" without rewriting that rule, and doing it silently would be adding routing
+ * nobody wrote. The planner says so (`group_feed_rules_unused`).
+ */
+export function layoutRules(group: ProfileDocument['groups'][number] | null): Record<string, unknown>[] {
+  if (group === null || group.layout === undefined) return [];
+  return group.layout.rules.map((rule) => ({
+    ...(rule.network === undefined ? {} : { network: rule.network }),
+    ...(rule.port === undefined ? {} : { port: rule.port }),
+    ...(rule.privateDestination === undefined ? {} : { ip_is_private: true }),
+    ...(rule.action === 'reject' ? { action: 'reject' } : { outbound: layoutTag(rule.to!) }),
+  }));
+}
